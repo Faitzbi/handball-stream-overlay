@@ -345,7 +345,7 @@ html, body {
 }
 
 .info-label {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.8px;
@@ -353,16 +353,43 @@ html, body {
 }
 
 .info-value {
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--white);
 }
 
-.time-display {
-  font-family: 'Courier New', monospace;
+/* Status-spezifische Styles */
+.status-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #4ade80; /* Grün für Live */
+}
+
+.status-value.ended {
+  color: #f87171; /* Rot für beendet */
+}
+
+.status-value.paused {
+  color: #fbbf24; /* Gelb für Pause */
+}
+
+.status-value.preparation {
+  color: #a78bfa; /* Lila für Vorbereitung */
+}
+
+/* Event-spezifische Styles */
+.event-value {
+  font-size: 15px;
   font-weight: 600;
   color: var(--white);
+  max-width: 350px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 200px;
 }
+
 
 .info-separator {
   width: 1px;

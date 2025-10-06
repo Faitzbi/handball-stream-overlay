@@ -1,9 +1,10 @@
 {
-  "homeTeam": "VfL Vorwerk",
-  "awayTeam": "TSV Groß Grönau 2",
-  "homeGoals": 3,
+  "homeTeam": "ASV Rurtal Hückelhoven",
+  "awayTeam": "HG Kaarst / Büttgen II",
+  "homeGoals": 12,
   "awayGoals": 3,
-  "clock": "11:25",
-  "period": "Jetzt Live!",
-  "lastScorer": "Theresa Schauer"
+  "period": "Halbzeit",
+  "lastScorer": "Anonym Anonym",
+  "lastEvent": "18:29 - Zwei Minuten Strafe (2-Minuten Strafe HG Kaarst / Büttgen II)",
+  "gameStatus": "Live"
 }

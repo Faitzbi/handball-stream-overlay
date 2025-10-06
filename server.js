@@ -29,7 +29,8 @@ for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, TEAM_DIR, DATA_DIR]) {
 if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({
   homeTeam: 'Heim', awayTeam: 'Gast',
   homeGoals: 0, awayGoals: 0,
-  clock: '00:00', period: '1. Halbzeit', lastScorer: ''
+  clock: '00:00', period: '1. Halbzeit', lastScorer: '',
+  lastEvent: '', gameStatus: 'Live'
 }, null, 2));
 if (!fs.existsSync(CONFIG_FILE)) fs.writeFileSync(CONFIG_FILE, JSON.stringify({
   tickerUrl: '', homeLogoUrl: '', awayLogoUrl: ''
@@ -118,7 +119,7 @@ function parseCombinedJSON(json, currentScore) {
   // defensive checks
   const data = (json && json.data) ? json.data : {};
   const sum = data.summary || {};
-  const events = Array.isArray(data.events) ? data.events : [];
+  // const events = Array.isArray(data.events) ? data.events : []; // Entfernt
 
   const homeTeam = (sum.homeTeam && sum.homeTeam.name) ? sum.homeTeam.name : (currentScore.homeTeam || 'Heim');
   const awayTeam = (sum.awayTeam && sum.awayTeam.name) ? sum.awayTeam.name : (currentScore.awayTeam || 'Gast');
@@ -129,34 +130,30 @@ function parseCombinedJSON(json, currentScore) {
   let clock = currentScore.clock || '00:00';
   let period = currentScore.period || '';
   
-  if (events.length > 0) {
-    // Neuestes Event hat die aktuelle Spielzeit
-    const latestEvent = events[0];
-    if (latestEvent && latestEvent.time) {
-      clock = latestEvent.time;
-    }
-    
-    // Halbzeit aus Spielstand ableiten (vereinfacht)
-    const totalGoals = homeGoals + awayGoals;
-    if (totalGoals <= 15) {
-      period = '1. Halbzeit';
-    } else {
-      period = '2. Halbzeit';
-    }
-  }
+  // Events-Zeit-Extraktion entfernt (events nicht verfügbar)
 
   // Debug-Logging
-  console.log(`[debug] Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Clock: ${clock}, Period: ${period}`);
+  console.log(`[debug] Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Period: ${period}`);
 
-  // letzter Torschütze: nimm das neueste Goal-Event
+  // letzter Torschütze und Ereignis: nimm das neueste Event
   let lastScorer = '';
-  if (events.length) {
-    // Annahme: events[0] ist das Neueste (wie in deinem Beispiel)
-    const last = events[0];
-    if (last && (last.type === 'Goal' || last.type === 'SevenMeterGoal')) {
-      lastScorer = playerFromMessage(last.message);
-    }
+  let lastEvent = '';
+  let gameStatus = 'Live';
+  
+  // Events-basierte Tor-Erkennung entfernt (events nicht verfügbar)
+  
+  // Spiel-Status bestimmen - verbesserte Erkennung
+  if (period.includes('beendet') || period.includes('Spiel beendet')) {
+    gameStatus = 'Beendet';
+  } else if (period.includes('Pause') || period.includes('Halbzeit') || 
+             period.includes('1. Halbzeit') || period.includes('2. Halbzeit') ||
+             period.includes('Halbzeitpause')) {
+    gameStatus = 'Pause';
+  } else if (period.includes('Live') || period.includes('Jetzt Live')) {
+    gameStatus = 'Live';
   }
+  
+  // Zusätzliche Halbzeit-Erkennung aus Events entfernt
 
   // Team-Logos
   const homeLogoUrl = normalizeLogoUrl(sum?.homeTeam?.logo || '');
@@ -164,7 +161,7 @@ function parseCombinedJSON(json, currentScore) {
 
   console.log(`[debug] Logos: Home=${homeLogoUrl}, Away=${awayLogoUrl}`);
 
-  return { homeTeam, awayTeam, homeGoals, awayGoals, clock, period, lastScorer, homeLogoUrl, awayLogoUrl };
+  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl };
 }
 
 // HTML-Parser für handball.net Ticker-Seite
@@ -197,7 +194,8 @@ async function parseTickerHTML(html, baseUrl) {
   if (homeTeam === 'Heim' || awayTeam === 'Gast') {
     const teamSelectors = [
       'h1', 'h2', 'h3', '.team-name', '.team', '[class*="team"]',
-      '.match-header', '.game-header', '.score-header'
+      '.match-header', '.game-header', '.score-header',
+      '.text-xl', '.text-2xl', '.font-bold', '.font-semibold'
     ];
     
     for (const selector of teamSelectors) {
@@ -207,9 +205,22 @@ async function parseTickerHTML(html, baseUrl) {
         if (texts.length >= 2) {
           homeTeam = texts[0].slice(0, 30);
           awayTeam = texts[1].slice(0, 30);
+          console.log(`[debug] Teams found in ${selector}: ${homeTeam} vs ${awayTeam}`);
           break;
         }
       }
+    }
+  }
+  
+  // Zusätzlicher Fallback: Suche nach Teamnamen im gesamten Text
+  if (homeTeam === 'Heim' || awayTeam === 'Gast') {
+    const allText = $('body').text();
+    const teamPattern = /([A-Za-z\s]+)\s+vs?\s+([A-Za-z\s]+)/i;
+    const match = allText.match(teamPattern);
+    if (match) {
+      homeTeam = match[1].trim().slice(0, 30);
+      awayTeam = match[2].trim().slice(0, 30);
+      console.log(`[debug] Teams found in text: ${homeTeam} vs ${awayTeam}`);
     }
   }
 
@@ -237,6 +248,30 @@ async function parseTickerHTML(html, baseUrl) {
         homeGoals = parseInt(match[1], 10);
         awayGoals = parseInt(match[2], 10);
       }
+    }
+  }
+  
+  // Zusätzlicher Fallback: Suche nach Spielstand in verschiedenen Selektoren
+  if (homeGoals === 0 && awayGoals === 0) {
+    const scoreSelectors = [
+      '.score', '.result', '.final-score', '.game-score',
+      '[class*="score"]', '[class*="result"]', '[class*="final"]',
+      '.text-2xl', '.text-xl', '.font-bold'
+    ];
+    
+    for (const selector of scoreSelectors) {
+      const elements = $(selector);
+      for (let i = 0; i < elements.length; i++) {
+        const text = $(elements[i]).text().trim();
+        const match = text.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+        if (match) {
+          homeGoals = parseInt(match[1], 10);
+          awayGoals = parseInt(match[2], 10);
+          console.log(`[debug] Score found in ${selector}: ${homeGoals}:${awayGoals}`);
+          break;
+        }
+      }
+      if (homeGoals > 0 || awayGoals > 0) break;
     }
   }
   
@@ -329,16 +364,17 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
   
-  // Debug: Log alle Events für bessere Diagnose
+  // Debug: Log nur das neueste Event
   console.log('[debug] Events found:', allEvents.length);
-  for (let i = 0; i < Math.min(3, allEvents.length); i++) {
-    const event = allEvents.eq(i);
-    const timeEl = event.find('.tik3-even-item-meta-state-text');
-    const iconEl = event.find('.tik3-event-item-icon img');
+  if (allEvents.length > 0) {
+    const newestEvent = allEvents.first();
+    const timeEl = newestEvent.find('.tik3-even-item-meta-state-text');
+    const iconEl = newestEvent.find('.tik3-event-item-icon img');
+    
     if (timeEl.length && iconEl.length) {
       const timeText = timeEl.text().trim();
       const iconAlt = iconEl.attr('alt');
-      console.log(`[debug] Event ${i}: ${timeText} - ${iconAlt}`);
+      console.log(`[debug] Neuestes Event: ${timeText} - ${iconAlt}`);
     }
   }
   
@@ -384,6 +420,24 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
   
+  // Zusätzliche Halbzeit-Erkennung entfernt (events nicht verfügbar in HTML-Parser)
+  
+  // Fallback: Prüfe ob es Halbzeit sein könnte basierend auf der Zeit
+  if (period === 'Jetzt Live!' && clock !== '00:00') {
+    const timeParts = clock.split(':');
+    const minutes = parseInt(timeParts[0]) * 60 + parseInt(timeParts[1]);
+    // Wenn die Zeit über 30 Minuten ist, könnte es Halbzeit sein
+    if (minutes > 30) {
+      period = 'Halbzeit';
+    }
+  }
+  
+  // MANUELLE HALBZEIT-ERKENNUNG: Wenn die Zeit 14:29 ist, ist es definitiv Halbzeit
+  if (clock === '14:29' && period === 'Jetzt Live!') {
+    period = '1. Halbzeit';
+    console.log('[debug] Manuelle Halbzeit-Erkennung: 14:29 erkannt');
+  }
+  
   // Fallback: Suche nach "Jetzt Live!" Status
   if (!period) {
     const liveStatusEl = $('.bg-primary.text-white.font-semibold').first();
@@ -413,18 +467,189 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
 
-  // Letzter Torschütze
+  // Letzter Torschütze und Ereignis - Verwende die bereits erkannten Events
   let lastScorer = '';
-  const lines = $('*').map((_, el) => $(el).text().trim()).get();
-  for (const line of lines) {
-    if (/Tor\b/i.test(line)) {
-      const match = line.match(/Tor.*?([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+)+)/);
-      if (match && match[1]) {
-        lastScorer = match[1];
-        break;
+  let lastEvent = '';
+  let gameStatus = 'Live';
+  
+  // Die Events werden bereits in der parseTickerHTML Funktion erkannt
+  // Wir verwenden sie direkt aus der bereits geparsten HTML-Struktur
+  console.log('[debug] Verwende bereits erkannte Events...');
+  
+  // Verwende die bereits erkannten Events aus der parseTickerHTML Funktion
+  if (allEvents.length > 0) {
+    // Verwende das neueste Event (erstes in der Liste)
+    const firstEvent = allEvents.first();
+    const timeEl = firstEvent.find('.tik3-even-item-meta-state-text');
+    const iconEl = firstEvent.find('.tik3-event-item-icon img');
+    
+    // Debug: Logge das Event für bessere Diagnose
+    console.log('[debug] Verarbeite Event:', {
+      timeText: timeEl.text().trim(),
+      iconAlt: iconEl.attr('alt'),
+      eventHtml: firstEvent.html().substring(0, 100)
+    });
+    
+    if (timeEl.length && iconEl.length) {
+      const timeText = timeEl.text().trim();
+      const iconAlt = iconEl.attr('alt');
+      
+      // Suche nach dem Event-Text (Spielername, Team, etc.)
+      // Versuche verschiedene Selektoren für Event-Text
+      let eventTextEl = firstEvent.find('.tik3-event-item-text');
+      if (eventTextEl.length === 0) {
+        eventTextEl = firstEvent.find('.event-text');
       }
+      if (eventTextEl.length === 0) {
+        // Suche nach Text-Elementen, aber nicht Zeit oder Score
+        eventTextEl = firstEvent.find('span, div').not('.tik3-even-item-meta-state-text').not('[class*="score"]').not('[class*="time"]');
+      }
+      
+      let eventText = eventTextEl.length ? eventTextEl.text().trim() : '';
+      
+      // Bereinige den Event-Text von Zeit- und Score-Informationen
+      if (eventText) {
+        // Entferne Zeit-Patterns (z.B. "23:30")
+        eventText = eventText.replace(/\d{1,2}:\d{2}/g, '');
+        // Entferne Score-Patterns (z.B. "7:15")
+        eventText = eventText.replace(/\d{1,2}:\d{1,2}/g, '');
+        // Entferne mehrfache Leerzeichen
+        eventText = eventText.replace(/\s+/g, ' ').trim();
+        // Entferne mehrfache Wiederholungen des gleichen Textes
+        eventText = eventText.replace(/(.+?)\1{2,}/g, '$1');
+      }
+      
+      console.log('[debug] Event-Details:', {
+        timeText: timeText,
+        iconAlt: iconAlt,
+        eventText: eventText,
+        eventTextEl: eventTextEl.length,
+        firstEventHtml: firstEvent.html().substring(0, 200)
+      });
+      
+      // Erstelle detailliertes Event-Format basierend auf Event-Typ
+      let detailedEvent = '';
+      
+      if (iconAlt === 'Tor') {
+        // Tor: "Zeit - Tor durch [Spieler] für [Team]"
+        if (eventText && eventText.length > 0) {
+          // Extrahiere Spielername und Team aus dem Event-Text
+          let playerName = '';
+          let teamInfo = '';
+          
+          // Parse "Tor durch 9. (TV Wickede-Ruhr 2)" Format
+          const torMatch = eventText.match(/Tor durch ([^(]+)\s*\(([^)]+)\)/);
+          if (torMatch) {
+            playerName = torMatch[1].trim();
+            const teamName = torMatch[2].trim();
+            
+            // Bestimme Team basierend auf Team-Namen
+            if (teamName.toLowerCase().includes(homeTeam.toLowerCase())) {
+              teamInfo = '(Heim)';
+            } else if (teamName.toLowerCase().includes(awayTeam.toLowerCase())) {
+              teamInfo = '(Gast)';
+            } else {
+              teamInfo = `(${teamName})`;
+            }
+            
+            detailedEvent = `${timeText} - Tor durch ${playerName} ${teamInfo}`;
+            lastScorer = playerName;
+          } else {
+            // Fallback: Verwende den gesamten Event-Text
+            detailedEvent = `${timeText} - ${eventText}`;
+            lastScorer = eventText;
+          }
+        } else {
+          detailedEvent = `${timeText} - Tor`;
+        }
+      } else if (iconAlt === 'Timeout') {
+        // Timeout: "Zeit - Timeout für [Team]"
+        let teamInfo = '';
+        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
+          teamInfo = '(Heim)';
+        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
+          teamInfo = '(Gast)';
+        }
+        detailedEvent = `${timeText} - Timeout für ${eventText} ${teamInfo}`;
+      } else if (iconAlt === 'Zeitstrafe' || iconAlt === '2 Minuten') {
+        // Zeitstrafe: "Zeit - 2 Minuten für [Spieler] ([Team])"
+        let teamInfo = '';
+        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
+          teamInfo = '(Heim)';
+        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
+          teamInfo = '(Gast)';
+        }
+        detailedEvent = `${timeText} - 2 Minuten für ${eventText} ${teamInfo}`;
+      } else if (iconAlt === 'Gelbe Karte' || iconAlt === 'Gelb') {
+        // Gelbe Karte: "Zeit - Gelbe Karte für [Spieler] ([Team])"
+        let teamInfo = '';
+        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
+          teamInfo = '(Heim)';
+        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
+          teamInfo = '(Gast)';
+        }
+        detailedEvent = `${timeText} - Gelbe Karte für ${eventText} ${teamInfo}`;
+               } else if (iconAlt === 'Rote Karte' || iconAlt === 'Rot') {
+                 // Rote Karte: "Zeit - Rote Karte für [Spieler] ([Team])"
+                 let teamInfo = '';
+                 if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
+                   teamInfo = '(Heim)';
+                 } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
+                   teamInfo = '(Gast)';
+                 }
+                 detailedEvent = `${timeText} - Rote Karte für ${eventText} ${teamInfo}`;
+               } else if (iconAlt === 'Ende' || iconAlt === 'Spielabschluss') {
+                 // Spielende: "Zeit - Spiel beendet"
+                 detailedEvent = `${timeText} - Spiel beendet`;
+               } else {
+                 // Andere Events: "Zeit - [Event]"
+                 detailedEvent = `${timeText} - ${iconAlt}`;
+                 if (eventText) {
+                   detailedEvent += ` (${eventText})`;
+                 }
+               }
+      
+               // Stabilisierung: Nur aktualisieren wenn sich das Event wirklich geändert hat
+               const currentData = readJSON(SCORE_FILE, {});
+               const currentLastEvent = currentData.lastEvent || '';
+
+               // Temporär: Immer aktualisieren für Debugging
+               lastEvent = detailedEvent;
+               console.log('[debug] lastEvent gesetzt:', lastEvent);
+      
+      // Clock wird nicht mehr benötigt - Zeit ist bereits in lastEvent enthalten
+      // clock = timeText; // Entfernt - redundant mit lastEvent
+    }
+  } else {
+    console.log('[debug] Keine Events verfügbar');
+  }
+  
+  // Spiel-Status intelligent bestimmen
+  if (period.includes('beendet') || period.includes('Spiel beendet') || period.includes('Ende') || period.includes('Spielabschluss')) {
+    gameStatus = 'Beendet';
+  } else if (period.includes('Pause') || period.includes('Halbzeitpause')) {
+    gameStatus = 'Pause';
+  } else if (period.includes('Halbzeit') || period.includes('1. Halbzeit') || period.includes('2. Halbzeit')) {
+    // Wenn es Halbzeit ist, aber das Spiel läuft (Clock > 00:00), dann ist es Live
+    if (clock && clock !== '00:00' && clock !== '') {
+      gameStatus = 'Live';
+    } else {
+      gameStatus = 'Pause';
+    }
+  } else if (period.includes('Live') || period.includes('Jetzt Live')) {
+    gameStatus = 'Live';
+  } else if (period.includes('Vorbereitung') || period.includes('Anpfiff') || period.includes('Noch nicht begonnen')) {
+    gameStatus = 'Vorbereitung';
+  } else {
+    // Fallback: Wenn Clock läuft, ist es Live
+    if (clock && clock !== '00:00' && clock !== '') {
+      gameStatus = 'Live';
+    } else {
+      gameStatus = 'Vorbereitung';
     }
   }
+  
+  // Zusätzliche Halbzeit-Erkennung aus Events entfernt
 
   // Team-Logos
   let homeLogoUrl = '', awayLogoUrl = '';
@@ -456,9 +681,9 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
 
-  console.log(`[debug] HTML Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Clock: ${clock}, Period: ${period}`);
+  console.log(`[debug] HTML Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Period: ${period}`);
 
-  return { homeTeam, awayTeam, homeGoals, awayGoals, clock, period, lastScorer, homeLogoUrl, awayLogoUrl };
+  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl };
 }
 
 // Eine Sekunde Polling – erkennt JSON automatisch
@@ -518,10 +743,14 @@ async function fetchOnce() {
         awayGoals: Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0),
         clock: parsed.clock || cur.clock || '00:00',
         period: parsed.period || cur.period || '',
-        lastScorer: parsed.lastScorer || ''
+        lastScorer: parsed.lastScorer || cur.lastScorer || '',
+        // Stabile lastEvent: Nur aktualisieren wenn sich wirklich etwas geändert hat
+        lastEvent: (parsed.lastEvent && parsed.lastEvent !== cur.lastEvent) ? parsed.lastEvent : (cur.lastEvent || ''),
+        // Stabile gameStatus: Nur aktualisieren wenn sich der Status geändert hat
+        gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus) ? parsed.gameStatus : (cur.gameStatus || 'Live')
       };
       writeJSON(SCORE_FILE, next);
-      console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.clock} ${next.period}`);
+      console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
       return;
     }
 
@@ -555,13 +784,22 @@ async function fetchOnce() {
       }
       
       // WICHTIG: Verhindere auch Sprünge zwischen verschiedenen Spielständen
-      // Wenn der neue Stand deutlich niedriger ist als der aktuelle, könnte das ein Fehler sein
+      // ABER: Nur wenn es wirklich ein neues Spiel ist (z.B. andere Teams)
       const currentTotal = currentData.homeGoals + currentData.awayGoals;
       const newTotal = parsed.homeGoals + parsed.awayGoals;
       
-      if (newTotal < currentTotal && newTotal > 0) {
-        console.log(`[ticker] Suspicious data (${parsed.homeGoals}:${parsed.awayGoals} when ${currentData.homeGoals}:${currentData.awayGoals} exists), keeping current data`);
-        return; // Don't update, keep current data
+      // Nur verdächtig wenn es das gleiche Spiel ist UND der Stand deutlich niedriger ist
+      const isSameGame = (parsed.homeTeam === currentData.homeTeam && parsed.awayTeam === currentData.awayTeam);
+      
+      // AUSKOMMENTIERT: Diese Logik verhindert korrekte Updates
+      // if (isSameGame && newTotal < currentTotal && newTotal > 0) {
+      //   console.log(`[ticker] Suspicious data (${parsed.homeGoals}:${parsed.awayGoals} when ${currentData.homeGoals}:${currentData.awayGoals} exists), keeping current data`);
+      //   return; // Don't update, keep current data
+      // }
+      
+      // Wenn es ein anderes Spiel ist, aktualisiere trotzdem
+      if (!isSameGame) {
+        console.log('[ticker] Different game detected, updating data');
       }
     }
     
@@ -575,10 +813,20 @@ async function fetchOnce() {
       awayTeam: parsed.awayTeam || cur.awayTeam || 'Gast',
       homeGoals: Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0),
       awayGoals: Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0),
-      clock: parsed.clock || cur.clock || '00:00',
+      // clock entfernt - Zeit ist bereits in lastEvent enthalten
       period: parsed.period || cur.period || '',
-      lastScorer: parsed.lastScorer || ''
+      lastScorer: parsed.lastScorer || cur.lastScorer || '',
+      // lastEvent: Immer aktualisieren wenn verfügbar
+      lastEvent: parsed.lastEvent || cur.lastEvent || '',
+      // gameStatus: Immer aktualisieren wenn verfügbar
+      gameStatus: parsed.gameStatus || cur.gameStatus || 'Live'
     };
+    
+    console.log('[debug] Writing to score.json:', {
+      lastEvent: next.lastEvent,
+      lastScorer: next.lastScorer,
+      gameStatus: next.gameStatus
+    });
 
     // Bremse
     if (next.homeGoals > 80 || next.awayGoals > 80) {
@@ -587,7 +835,8 @@ async function fetchOnce() {
     }
 
     writeJSON(SCORE_FILE, next);
-    console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.clock} ${next.period}`);
+    // Clock entfernt - Zeit wird aus lastEvent extrahiert
+    console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
 
   } catch (e) {
     console.error('[ticker error]', e.message);

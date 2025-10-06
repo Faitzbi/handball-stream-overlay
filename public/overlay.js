@@ -1,6 +1,9 @@
 function $(s){ return document.querySelector(s); }
 var lastScorerSeen = "";
 var playerDisplayTimeout = null;
+var lastEventSeen = "";
+var lastEventText = "";
+var stableEventText = "";
 
 /* einfache JSON-Fetch-Funktion */
 function j(url){
@@ -90,7 +93,7 @@ function refreshScore(){
       setIf($("#awayTeam"), s.awayTeam, "Gast");
       setIf($("#homeGoals"), s.homeGoals, 0);
       setIf($("#awayGoals"), s.awayGoals, 0);
-      setIf($("#clock"), s.clock, "00:00");
+      // Clock entfernt - Zeit wird aus lastEvent extrahiert
       
       // Status und Ereignis aktualisieren
       updateGameStatus(s);
@@ -147,9 +150,8 @@ function refreshScore(){
                   console.log("Showing player goal for our team");
                   showPlayerGoal(s.lastScorer, false);
                 } else {
-                  // Toast nur für andere Teams
-                  console.log("Showing toast for other team");
-                  showToast("Tor: " + s.lastScorer);
+                  // Kein Toast mehr für andere Teams
+                  console.log("Goal by other team - no display");
                 }
               } else if (isAwayGoal) {
                 broadcastBar.classList.add("goal-animation", "away-goal");
@@ -158,9 +160,8 @@ function refreshScore(){
                   console.log("Showing player goal for our team (away)");
                   showPlayerGoal(s.lastScorer, false);
                 } else {
-                  // Toast nur für andere Teams
-                  console.log("Showing toast for other team (away)");
-                  showToast("Tor: " + s.lastScorer);
+                  // Kein Toast mehr für andere Teams
+                  console.log("Goal by other team (away) - no display");
                 }
               } else {
                 broadcastBar.classList.add("goal-animation");
@@ -169,8 +170,8 @@ function refreshScore(){
                   console.log("Fallback: Showing player goal for our team");
                   showPlayerGoal(s.lastScorer, false);
                 } else {
-                  console.log("Fallback: Showing toast for other team");
-                  showToast("Tor: " + s.lastScorer);
+                  // Kein Toast mehr für andere Teams
+                  console.log("Fallback: Goal by other team - no display");
                 }
               }
               
@@ -267,6 +268,87 @@ function generateImageFileName(playerName) {
     .replace(/ß/g, 'ss')
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, '_') + '.jpg';
+}
+
+/* Spiel-Status aktualisieren */
+function updateGameStatus(scoreData) {
+  var statusEl = $("#gameStatus");
+  if (!statusEl) return;
+  
+  var gameStatus = scoreData.gameStatus || "Live";
+  var period = scoreData.period || "";
+  var statusClass = "";
+  
+  // Fallback: Bestimme Status aus period falls gameStatus nicht verfügbar
+  if (!scoreData.gameStatus) {
+    if (period.includes("beendet") || period.includes("Spiel beendet") || period.includes("Ende")) {
+      gameStatus = "Beendet";
+    } else if (period.includes("Pause") || period.includes("Halbzeit")) {
+      gameStatus = "Pause";
+    } else if (period.includes("Vorbereitung") || period.includes("Anpfiff")) {
+      gameStatus = "Vorbereitung";
+    } else {
+      gameStatus = "Live";
+    }
+  } else {
+    gameStatus = scoreData.gameStatus;
+  }
+
+  // Status-spezifische CSS-Klassen
+  if (gameStatus === "Beendet") {
+    statusClass = "ended";
+  } else if (gameStatus === "Pause") {
+    statusClass = "paused";
+  } else if (gameStatus === "Vorbereitung") {
+    statusClass = "preparation";
+  } else {
+    statusClass = "";
+  }
+  
+  statusEl.textContent = gameStatus;
+  statusEl.className = "info-value status-value " + statusClass;
+}
+
+
+/* Letztes Ereignis aktualisieren */
+function updateLastEvent(scoreData) {
+  var eventEl = $("#lastEvent");
+  if (!eventEl) return;
+  
+  var lastEvent = scoreData.lastEvent || "";
+  var lastScorer = scoreData.lastScorer || "";
+  var period = scoreData.period || "";
+  var homeGoals = parseInt(scoreData.homeGoals) || 0;
+  var awayGoals = parseInt(scoreData.awayGoals) || 0;
+  
+  // Status-Event-Logik entfernt - Backend liefert das korrekte letzte Ereignis
+  
+  // Debug: Logge die Werte
+  console.log("Event Debug:", {
+    period: period,
+    lastEvent: lastEvent,
+    lastScorer: lastScorer,
+    stableEventText: stableEventText
+  });
+  
+  // Vereinfachte Logik: Zeige einfach das letzte Ereignis zum Zeitstempel
+  var newEventText = "";
+  
+  // Einfach das Backend lastEvent verwenden (enthält das letzte Ereignis zum Zeitstempel)
+  if (lastEvent && lastEvent !== "") {
+    newEventText = lastEvent;
+  }
+  // Fallback: "-"
+  else {
+    newEventText = "-";
+  }
+  
+  // Nur aktualisieren wenn sich der Text wirklich geändert hat
+  if (newEventText !== "" && newEventText !== stableEventText) {
+    console.log("Event aktualisiert:", newEventText);
+    stableEventText = newEventText;
+    eventEl.textContent = stableEventText;
+  }
 }
 
 /* Tor-Toast anzeigen */

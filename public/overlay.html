@@ -60,14 +60,15 @@
     <!-- Spiel-Info unter dem roten Balken -->
     <div class="game-info-bar">
       <div class="game-info">
-        <div class="info-item">
-          <span class="info-label">Halbzeit</span>
-          <span id="period" class="info-value">1. Halbzeit</span>
+        <!-- Status (Live/Spiel beendet) -->
+        <div class="info-item status-item">
+          <span id="gameStatus" class="info-value status-value">Live</span>
         </div>
         <div class="info-separator"></div>
-        <div class="info-item">
-          <span class="info-label">Zeit</span>
-          <span id="clock" class="info-value time-display">00:00</span>
+        <!-- Letztes Ereignis -->
+        <div class="info-item event-item">
+          <span class="info-label">Letztes Ereignis</span>
+          <span id="lastEvent" class="info-value event-value">-</span>
         </div>
       </div>
     </div>
