@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Handball Overlay Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --secondary: #64748b;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --background: #0f172a;
+      --surface: #1e293b;
+      --surface-light: #334155;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --border: #475569;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+      --radius: 12px;
+      --radius-lg: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, var(--background) 0%, #1e293b 100%);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 3rem;
+    }
+
+    .header h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--primary) 0%, #8b5cf6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 0.5rem;
+    }
+
+    .header p {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 2rem;
+      margin-bottom: 2rem;
+      box-shadow: var(--shadow-lg);
+      transition: all 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .card-header i {
+      font-size: 1.5rem;
+      margin-right: 0.75rem;
+      color: var(--primary);
+    }
+
+    .card-header h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: var(--text-primary);
+      font-size: 0.95rem;
+    }
+
+    .form-group input[type="text"] {
+      width: 100%;
+      padding: 0.875rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--background);
+      color: var(--text-primary);
+      font-size: 1rem;
+      transition: all 0.3s ease;
+    }
+
+    .form-group input[type="text"]:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+
+    .form-group small {
+      display: block;
+      margin-top: 0.5rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.875rem 1.5rem;
+      border: none;
+      border-radius: var(--radius);
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      text-decoration: none;
+      gap: 0.5rem;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      color: white;
+      box-shadow: var(--shadow);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+      color: white;
+    }
+
+    .btn-success:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .code-block {
+      background: var(--background);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      font-size: 0.9rem;
+      color: var(--text-primary);
+      word-break: break-all;
+      margin-top: 0.5rem;
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--surface-light);
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .status-indicator.online {
+      color: var(--success);
+    }
+
+    .status-indicator.offline {
+      color: var(--danger);
+    }
+
+    .sponsor-info {
+      background: linear-gradient(135deg, var(--surface) 0%, var(--surface-light) 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    .sponsor-info h3 {
+      color: var(--text-primary);
+      margin-bottom: 0.75rem;
+      font-weight: 600;
+    }
+
+    .sponsor-info p {
+      color: var(--text-secondary);
+      margin-bottom: 0.5rem;
+    }
+
+    .sponsor-info code {
+      background: var(--background);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      font-size: 0.875rem;
+      color: var(--primary);
+    }
+
+    .loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .toast {
+      position: fixed;
+      top: 2rem;
+      right: 2rem;
+      background: var(--success);
+      color: white;
+      padding: 1rem 1.5rem;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      transform: translateX(100%);
+      transition: transform 0.3s ease;
+      z-index: 1000;
+    }
+
+    .toast.show {
+      transform: translateX(0);
+    }
+
+    .toast.error {
+      background: var(--danger);
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 1rem;
+      }
+      
+      .header h1 {
+        font-size: 2rem;
+      }
+      
+      .form-row,
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1><i class="fas fa-volleyball-ball"></i> Handball Overlay Admin</h1>
+      <p>Verwalte dein Handball-Stream-Overlay</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <i class="fas fa-link"></i>
+        <h2>Verbindung & Konfiguration</h2>
+      </div>
+      
+      <div class="form-row">
+        <div class="form-group">
+          <label for="tickerUrl">
+            <i class="fas fa-rss"></i> Ticker-URL
+          </label>
+          <input id="tickerUrl" type="text" placeholder="https://www.handball.net/spiele/.../ticker"/>
+          <small>Nach dem Speichern läuft der Live-Fetcher automatisch (alle 2 Sekunden).</small>
+        </div>
+        <div class="form-group">
+          <label for="overlayLink">
+            <i class="fas fa-tv"></i> Overlay-Link
+          </label>
+          <div class="code-block" id="overlayLink">http://localhost:3000/overlay</div>
+          <small>Diesen Link als Browser Source in OBS verwenden.</small>
+        </div>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="homeLogoUrl">
+            <i class="fas fa-home"></i> Home-Logo-URL (optional)
+          </label>
+          <input id="homeLogoUrl" type="text" placeholder="http(s):// oder leer lassen" />
+          <small>Wenn leer: versucht automatisch vom Ticker zu erkennen. Alternativ lokal: <code>/assets/teams/home.png</code></small>
+        </div>
+        <div class="form-group">
+          <label for="awayLogoUrl">
+            <i class="fas fa-plane"></i> Away-Logo-URL (optional)
+          </label>
+          <input id="awayLogoUrl" type="text" placeholder="http(s):// oder leer lassen" />
+          <small>Wenn leer: versucht automatisch vom Ticker zu erkennen. Alternativ lokal: <code>/assets/teams/away.png</code></small>
+        </div>
+      </div>
+      
+      <button id="saveCfg" class="btn btn-primary">
+        <i class="fas fa-save"></i> Konfiguration speichern
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <i class="fas fa-edit"></i>
+        <h2>Manueller Score (Fallback/Test)</h2>
+      </div>
+      
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="homeTeam">
+            <i class="fas fa-home"></i> Heimteam
+          </label>
+          <input id="homeTeam" type="text" value="Heim" />
+        </div>
+        <div class="form-group">
+          <label for="awayTeam">
+            <i class="fas fa-plane"></i> Gastteam
+          </label>
+          <input id="awayTeam" type="text" value="Gast" />
+        </div>
+        <div class="form-group">
+          <label for="homeGoals">
+            <i class="fas fa-futbol"></i> Heim Tore
+          </label>
+          <input id="homeGoals" type="text" value="0" />
+        </div>
+        <div class="form-group">
+          <label for="awayGoals">
+            <i class="fas fa-futbol"></i> Gast Tore
+          </label>
+          <input id="awayGoals" type="text" value="0" />
+        </div>
+        <div class="form-group">
+          <label for="clock">
+            <i class="fas fa-clock"></i> Spieluhr (MM:SS)
+          </label>
+          <input id="clock" type="text" value="00:00" />
+        </div>
+        <div class="form-group">
+          <label for="period">
+            <i class="fas fa-stopwatch"></i> Phase
+          </label>
+          <input id="period" type="text" value="1. Halbzeit" />
+        </div>
+        <div class="form-group">
+          <label for="lastScorer">
+            <i class="fas fa-star"></i> Letzter Torschütze
+          </label>
+          <input id="lastScorer" type="text" value="" />
+        </div>
+      </div>
+      
+      <button id="saveScore" class="btn btn-success">
+        <i class="fas fa-save"></i> Score speichern
+      </button>
+      <small style="display: block; margin-top: 1rem; color: var(--text-secondary);">
+        <i class="fas fa-info-circle"></i> Nutze das bei Tests oder falls der Ticker mal ausfällt.
+      </small>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <i class="fas fa-images"></i>
+        <h2>Sponsoren & Assets</h2>
+      </div>
+      
+      <div class="sponsor-info">
+        <h3><i class="fas fa-lightbulb"></i> Automatische Sponsor-Erkennung</h3>
+        <p>Lade einfach Logos in den Ordner <code>/assets/logos</code> hoch - sie werden automatisch als LED-Bande oben durchgescrollt.</p>
+        <p><strong>Unterstützte Formate:</strong> PNG, JPG, WEBP, SVG</p>
+        <p><strong>Empfohlene Größe:</strong> 200x80px oder ähnliches Seitenverhältnis</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/public/admin.js"></script>
+</body>
+</html>

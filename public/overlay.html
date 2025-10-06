@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Handball Stream Overlay</title>
+  <link rel="stylesheet" href="/public/overlay.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Haupt-Overlay Container -->
+  <div class="overlay-container">
+    <!-- Haupt-Broadcast-Bar (oben) -->
+    <div class="broadcast-container">
+      <!-- Linker Bereich mit Heimteam -->
+      <section class="team-section home-team">
+        <div class="team-container">
+          <div class="team-logo-wrapper">
+            <img id="homeLogo" class="team-logo" alt="Heimteam Logo" />
+            <div class="logo-background"></div>
+          </div>
+          <div class="team-name-wrapper">
+            <span id="homeTeam" class="team-name">Heim</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Zentrale Score-Sektion -->
+      <main class="score-section">
+        <div class="score-main">
+          <div class="score-display">
+            <span id="homeGoals" class="score-number">0</span>
+            <div class="score-separator">
+              <div class="separator-line"></div>
+              <span class="separator-dot">:</span>
+              <div class="separator-line"></div>
+            </div>
+            <span id="awayGoals" class="score-number">0</span>
+          </div>
+          <div class="score-glow-effect"></div>
+        </div>
+      </main>
+
+      <!-- Rechter Bereich mit Gastteam -->
+      <section class="team-section away-team">
+        <div class="team-container">
+          <div class="team-name-wrapper">
+            <span id="awayTeam" class="team-name">Gast</span>
+          </div>
+          <div class="team-logo-wrapper">
+            <img id="awayLogo" class="team-logo" alt="Gastteam Logo" />
+            <div class="logo-background"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Spiel-Info unter dem roten Balken -->
+    <div class="game-info-bar">
+      <div class="game-info">
+        <div class="info-item">
+          <span class="info-label">Halbzeit</span>
+          <span id="period" class="info-value">1. Halbzeit</span>
+        </div>
+        <div class="info-separator"></div>
+        <div class="info-item">
+          <span class="info-label">Zeit</span>
+          <span id="clock" class="info-value time-display">00:00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sponsor-Display (unten links) -->
+    <div class="sponsor-display">
+      <div class="sponsor-container">
+        <div class="sponsor-label">Präsentiert von</div>
+        <div class="sponsor-logo-container">
+          <img id="sponsor-logo" class="sponsor-logo" alt="Sponsor Logo" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Spieler-Tor-Anzeige (unten links) -->
+    <div id="player-goal-display" class="player-goal-display hidden">
+      <div class="player-container">
+        <div class="player-image-container">
+          <img id="player-image" class="player-image" alt="Spieler Bild" />
+        </div>
+        <div class="player-info">
+          <div class="goal-text">Tor durch</div>
+          <div id="player-name" class="player-name">Spielername</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast-Benachrichtigungen -->
+    <div id="toast" class="toast-notification hidden" role="alert" aria-live="polite">
+      <div class="toast-content">
+        <div class="toast-icon">⚽</div>
+        <span class="toast-text"></span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/public/overlay.js"></script>
+</body>
+</html>
