@@ -216,7 +216,7 @@ async function parseTickerHTML(html, baseUrl) {
   // Spielstand extrahieren
   let homeGoals = 0, awayGoals = 0;
   
-  // Spezifische Suche nach dem Hauptspielstand
+  // Spezifische Suche nach dem Hauptspielstand - neue handball.net Struktur
   const scoreEl = $('.text-3xl.font-bold').first();
   if (scoreEl.length) {
     const scoreText = scoreEl.text().trim();
@@ -224,6 +224,19 @@ async function parseTickerHTML(html, baseUrl) {
     if (match) {
       homeGoals = parseInt(match[1], 10);
       awayGoals = parseInt(match[2], 10);
+    }
+  }
+  
+  // Fallback: Suche nach dem aktuellen Spielstand in der Hauptanzeige
+  if (homeGoals === 0 && awayGoals === 0) {
+    const mainScoreEl = $('.bg-black.text-white.text-center.rounded-t .text-3xl.font-bold').first();
+    if (mainScoreEl.length) {
+      const scoreText = mainScoreEl.text().trim();
+      const match = scoreText.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
+      if (match) {
+        homeGoals = parseInt(match[1], 10);
+        awayGoals = parseInt(match[2], 10);
+      }
     }
   }
   
@@ -249,13 +262,92 @@ async function parseTickerHTML(html, baseUrl) {
   // Spielzeit extrahieren
   let clock = '00:00';
   
-  // Suche nach Spielzeit in den Events (neuestes Event)
-  const timeEl = $('.tik3-even-item-meta-state-text').first();
-  if (timeEl.length) {
-    const timeText = timeEl.text().trim();
-    if (timeText && timeText !== '00:00') {
-      clock = timeText;
+  // Bei Live-Spielen: Suche nach dem neuesten Tor-Event (nicht Unterbrechung)
+  const allEvents = $('.tik3-flex-event');
+  for (let i = 0; i < allEvents.length; i++) {
+    const event = allEvents.eq(i);
+    const timeEl = event.find('.tik3-even-item-meta-state-text');
+    const iconEl = event.find('.tik3-event-item-icon img');
+    
+    if (timeEl.length && iconEl.length) {
+      const timeText = timeEl.text().trim();
+      const iconAlt = iconEl.attr('alt');
+      
+      // Nur Tor-Events berücksichtigen, nicht Unterbrechungen
+      if (timeText && timeText !== '00:00' && iconAlt === 'Tor') {
+        clock = timeText;
+        break; // Neuestes Tor-Event gefunden
+      }
     }
+  }
+  
+  // WICHTIG: Bei Live-Spielen die Zeit aus dem neuesten Event nehmen
+  // Aber nur wenn es ein Tor-Event ist, nicht eine Unterbrechung
+  if (clock === '00:00') {
+    const firstEvent = $('.tik3-flex-event').first();
+    const timeEl = firstEvent.find('.tik3-even-item-meta-state-text');
+    const iconEl = firstEvent.find('.tik3-event-item-icon img');
+    
+    if (timeEl.length && iconEl.length) {
+      const timeText = timeEl.text().trim();
+      const iconAlt = iconEl.attr('alt');
+      
+      // Nur Tor-Events berücksichtigen, nicht Unterbrechungen
+      if (timeText && timeText !== '00:00' && iconAlt === 'Tor') {
+        clock = timeText;
+      }
+    }
+  }
+  
+  // WICHTIG: Bei Live-Spielen die Zeit aus dem neuesten Event nehmen
+  // Aber nur wenn es ein Tor-Event ist, nicht eine Unterbrechung
+  if (clock === '00:00') {
+    const firstEvent = $('.tik3-flex-event').first();
+    const timeEl = firstEvent.find('.tik3-even-item-meta-state-text');
+    const iconEl = firstEvent.find('.tik3-event-item-icon img');
+    
+    if (timeEl.length && iconEl.length) {
+      const timeText = timeEl.text().trim();
+      const iconAlt = iconEl.attr('alt');
+      
+      // Nur Tor-Events berücksichtigen, nicht Unterbrechungen
+      if (timeText && timeText !== '00:00' && iconAlt === 'Tor') {
+        clock = timeText;
+      }
+    }
+  }
+  
+  // Fallback: Wenn kein Tor-Event gefunden, nehme das neueste Event
+  if (clock === '00:00') {
+    const firstEvent = $('.tik3-flex-event').first();
+    const timeEl = firstEvent.find('.tik3-even-item-meta-state-text');
+    if (timeEl.length) {
+      const timeText = timeEl.text().trim();
+      if (timeText && timeText !== '00:00') {
+        clock = timeText;
+      }
+    }
+  }
+  
+  // Debug: Log alle Events für bessere Diagnose
+  console.log('[debug] Events found:', allEvents.length);
+  for (let i = 0; i < Math.min(3, allEvents.length); i++) {
+    const event = allEvents.eq(i);
+    const timeEl = event.find('.tik3-even-item-meta-state-text');
+    const iconEl = event.find('.tik3-event-item-icon img');
+    if (timeEl.length && iconEl.length) {
+      const timeText = timeEl.text().trim();
+      const iconAlt = iconEl.attr('alt');
+      console.log(`[debug] Event ${i}: ${timeText} - ${iconAlt}`);
+    }
+  }
+  
+  // WICHTIG: Wenn keine Events gefunden wurden, extrahiere trotzdem die Hauptdaten
+  if (allEvents.length === 0) {
+    console.warn('[debug] No events found, but extracting main game data');
+    // Extrahiere trotzdem die Hauptdaten (Teams, Spielstand, etc.)
+    // aber setze clock auf '00:00' da keine Events vorhanden sind
+    clock = '00:00';
   }
   
   // Fallback: Suche im gesamten Text
@@ -279,14 +371,27 @@ async function parseTickerHTML(html, baseUrl) {
   // Halbzeit extrahieren
   let period = '';
   
-  // Suche nach Spielstatus
+  // Suche nach Spielstatus - neue handball.net Struktur
   const statusEl = $('.rounded-b.px-1').first();
   if (statusEl.length) {
     const statusText = statusEl.text().trim();
     if (statusText.includes('beendet')) {
       period = 'Spiel beendet';
+    } else if (statusText.includes('Jetzt Live!')) {
+      period = 'Jetzt Live!';
     } else if (statusText.includes('Halbzeit')) {
       period = statusText;
+    }
+  }
+  
+  // Fallback: Suche nach "Jetzt Live!" Status
+  if (!period) {
+    const liveStatusEl = $('.bg-primary.text-white.font-semibold').first();
+    if (liveStatusEl.length) {
+      const liveText = liveStatusEl.text().trim();
+      if (liveText.includes('Jetzt Live!')) {
+        period = 'Jetzt Live!';
+      }
     }
   }
   
@@ -378,7 +483,14 @@ async function fetchOnce() {
   };
 
   try {
-    const res = await fetch(tickerUrl, { headers });
+    // Cache-Busting: Add timestamp to prevent caching
+    const cacheBuster = `?_=${Date.now()}`;
+    const urlWithCacheBuster = tickerUrl.includes('?') ? `${tickerUrl}&_=${Date.now()}` : `${tickerUrl}${cacheBuster}`;
+    
+    const res = await fetch(urlWithCacheBuster, { 
+      headers,
+      cache: 'no-store' // Disable caching
+    });
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     const isApiLike = /\/api\//.test(tickerUrl) || /combined/.test(tickerUrl);
 
@@ -419,6 +531,40 @@ async function fetchOnce() {
     const parsed = await parseTickerHTML(html, tickerUrl);
     const cur = readJSON(SCORE_FILE, {});
     
+    // WICHTIG: Wenn Parser null zurückgibt (keine Events), behalte die aktuellen Daten
+    if (parsed === null) {
+      console.log('[ticker] Parser returned null, keeping current data');
+      return; // Don't update, keep current data
+    }
+    
+    // WICHTIG: Bei neuen Spielen ohne Events, aktualisiere trotzdem die Hauptdaten
+    if (parsed.homeGoals === 0 && parsed.awayGoals === 0 && parsed.clock === '00:00') {
+      console.log('[ticker] New game detected (no events yet), updating main data');
+      // Aktualisiere trotzdem die Hauptdaten (Teams, etc.)
+    }
+    
+    // WICHTIG: Verhindere Flickering bei instabilen Daten
+    // Wenn die neuen Daten deutlich von den aktuellen abweichen, prüfe die Plausibilität
+    const currentData = readJSON(SCORE_FILE, {});
+    if (currentData.homeGoals > 0 || currentData.awayGoals > 0) {
+      // Wenn bereits Tore vorhanden sind, aber neue Daten 0:0 zeigen, 
+      // könnte das ein Fehler sein - behalte die aktuellen Daten
+      if (parsed.homeGoals === 0 && parsed.awayGoals === 0 && parsed.clock === '00:00') {
+        console.log('[ticker] Suspicious data (0:0 when goals exist), keeping current data');
+        return; // Don't update, keep current data
+      }
+      
+      // WICHTIG: Verhindere auch Sprünge zwischen verschiedenen Spielständen
+      // Wenn der neue Stand deutlich niedriger ist als der aktuelle, könnte das ein Fehler sein
+      const currentTotal = currentData.homeGoals + currentData.awayGoals;
+      const newTotal = parsed.homeGoals + parsed.awayGoals;
+      
+      if (newTotal < currentTotal && newTotal > 0) {
+        console.log(`[ticker] Suspicious data (${parsed.homeGoals}:${parsed.awayGoals} when ${currentData.homeGoals}:${currentData.awayGoals} exists), keeping current data`);
+        return; // Don't update, keep current data
+      }
+    }
+    
     // Logos automatisch übernehmen
     if (parsed.homeLogoUrl) CONFIG.homeLogoUrl = parsed.homeLogoUrl;
     if (parsed.awayLogoUrl) CONFIG.awayLogoUrl = parsed.awayLogoUrl;
@@ -451,7 +597,7 @@ async function fetchOnce() {
 function startFetcher() {
   if (fetchTimer) clearInterval(fetchTimer);
   if (CONFIG.tickerUrl) {
-    fetchTimer = setInterval(fetchOnce, 1000); // jede Sekunde
+    fetchTimer = setInterval(fetchOnce, 500); // alle 500ms für schnellere Updates
     console.log('[ticker] running:', CONFIG.tickerUrl);
   } else {
     console.log('[ticker] idle (no URL)');
