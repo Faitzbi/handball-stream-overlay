@@ -39,15 +39,230 @@ if (!fs.existsSync(CONFIG_FILE)) fs.writeFileSync(CONFIG_FILE, JSON.stringify({
 const readJSON = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return fallback; } };
 const writeJSON = (p, obj) => fs.writeFileSync(p, JSON.stringify(obj, null, 2), 'utf-8');
 
-let CONFIG = readJSON(CONFIG_FILE, { tickerUrl: '', homeLogoUrl: '', awayLogoUrl: '', mascotUrl: '' });
-let logos = [];
+// Intelligente Event-Erkennung basierend auf Timestamps
+function extractEventTimestamp(eventText) {
+  if (!eventText) return null;
+  
+  // Extrahiere Zeitstempel aus Event-Text (z.B. "21:22 - Tor durch...")
+  const timeMatch = eventText.match(/^(\d{1,2}:\d{2})/);
+  if (timeMatch) {
+    const timeStr = timeMatch[1];
+    const [minutes, seconds] = timeStr.split(':').map(Number);
+    // Konvertiere zu Sekunden seit Spielbeginn
+    return minutes * 60 + seconds;
+  }
+  return null;
+}
+
+function isNewerEvent(newEvent, currentEvent) {
+  const newTimestamp = extractEventTimestamp(newEvent);
+  const currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  if (!newTimestamp || !currentTimestamp) {
+    // Fallback: Vergleiche Text-Länge (neuere Events sind oft länger)
+    return newEvent.length > currentEvent.length;
+  }
+  
+  return newTimestamp > currentTimestamp;
+}
+
+function isNewerScore(newScore, currentScore) {
+  const newTotal = newScore.homeGoals + newScore.awayGoals;
+  const currentTotal = currentScore.homeGoals + currentScore.awayGoals;
+  
+  // Nur wenn die Gesamtzahl der Tore gestiegen ist
+  return newTotal > currentTotal;
+}
+
+// Spielwechsel-Erkennung
+function isGameChange(newData, currentData) {
+  const newTeams = `${newData.homeTeam || ''} vs ${newData.awayTeam || ''}`;
+  const currentTeams = `${currentData.homeTeam || ''} vs ${currentData.awayTeam || ''}`;
+  
+  // Prüfe ob sich die Team-Namen geändert haben
+  const teamChanged = newTeams !== currentTeams && newTeams !== ' vs ' && currentTeams !== ' vs ';
+  
+  // Prüfe ob sich der Score drastisch geändert hat (möglicher Spielwechsel)
+  const newTotal = (newData.homeGoals || 0) + (newData.awayGoals || 0);
+  const currentTotal = (currentData.homeGoals || 0) + (currentData.awayGoals || 0);
+  const scoreReset = newTotal < currentTotal && newTotal <= 2; // Score wurde zurückgesetzt
+  
+  console.log('[game-change-detection]', {
+    teamChanged: teamChanged,
+    scoreReset: scoreReset,
+    newTeams: newTeams,
+    currentTeams: currentTeams,
+    newTotal: newTotal,
+    currentTotal: currentTotal
+  });
+  
+  return teamChanged || scoreReset;
+}
+
+// Keine globalen Variablen mehr - verhindert Caching alter Daten
+
+// Alle globalen Variablen entfernt - verhindert Caching alter Daten
+const EVENT_STABILITY_THRESHOLD = 1; // Event muss nur 1x identisch sein (weniger restriktiv)
+
+// Event-Format-Normalisierung
+function normalizeEventFormat(event) {
+  if (!event || event.trim() === '') return '';
+  
+  // Normalisiere Whitespace
+  let normalized = event.trim().replace(/\s+/g, ' ');
+  
+  // Normalisiere Zeitstempel-Format (z.B. "36:36" -> "36:36")
+  normalized = normalized.replace(/(\d{1,2}):(\d{2})/g, (match, minutes, seconds) => {
+    return `${minutes}:${seconds}`;
+  });
+  
+  // Normalisiere Tor-Format
+  normalized = normalized.replace(/Tor\s+durch\s+/g, 'Tor durch ');
+  
+  return normalized;
+}
+
+// Intelligente Event-Erkennung
+function checkEventStability(newEvent, currentEvent) {
+  // Normalisiere Events für Vergleich
+  const normalizedNewEvent = normalizeEventFormat(newEvent);
+  const normalizedCurrentEvent = normalizeEventFormat(currentEvent);
+  
+  // Wenn das Event identisch ist, erhöhe den Stabilitätszähler
+  if (normalizedNewEvent === normalizedCurrentEvent && normalizedNewEvent.trim() !== '') {
+    eventStabilityCount++;
+    console.log(`[event-stability] Event stable ${eventStabilityCount}/${EVENT_STABILITY_THRESHOLD}: ${normalizedNewEvent}`);
+    
+    // Wenn Event stabil genug ist, akzeptiere es
+    if (eventStabilityCount >= EVENT_STABILITY_THRESHOLD) {
+      lastStableEvent = normalizedNewEvent;
+      return true;
+    }
+    return false;
+  } else {
+    // Event hat sich geändert - prüfe ob es ein echtes neues Event ist
+    const isRealNewEvent = isRealNewEvent(newEvent, currentEvent);
+    
+    if (isRealNewEvent) {
+      // Echtes neues Event - sofort akzeptieren
+      eventStabilityCount = 0;
+      lastStableEvent = normalizedNewEvent;
+      console.log(`[event-stability] Real new event detected: ${normalizedCurrentEvent} -> ${normalizedNewEvent}`);
+      return true;
+    } else {
+      // Möglicher Pendulum-Effekt - reset Stabilitätszähler
+      eventStabilityCount = 0;
+      console.log(`[event-stability] Possible pendulum, reset counter: ${normalizedCurrentEvent} -> ${normalizedNewEvent}`);
+      return false;
+    }
+  }
+}
+
+// Prüfe ob es ein echtes neues Event ist
+function isRealNewEvent(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Extrahiere Zeitstempel aus beiden Events
+  const newTimestamp = extractEventTimestamp(newEvent);
+  const currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  // Wenn neue Zeitstempel vorhanden sind, vergleiche sie
+  if (newTimestamp && currentTimestamp) {
+    return newTimestamp > currentTimestamp;
+  }
+  
+  // Fallback: Vergleiche Text-Länge (neuere Events sind oft länger)
+  return newEvent.length > currentEvent.length;
+}
+
+// Prüfe ob ein Event chronologisch neuer ist
+function isChronologicallyNewer(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Extrahiere Zeitstempel aus beiden Events
+  const newTimestamp = extractEventTimestamp(newEvent);
+  const currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  console.log('[chronological-check]', {
+    newEvent: newEvent,
+    currentEvent: currentEvent,
+    newTimestamp: newTimestamp,
+    currentTimestamp: currentTimestamp,
+    isNewer: newTimestamp && currentTimestamp ? newTimestamp > currentTimestamp : false
+  });
+  
+  // Wenn beide Zeitstempel vorhanden sind, vergleiche sie
+  if (newTimestamp && currentTimestamp) {
+    return newTimestamp > currentTimestamp;
+  }
+  
+  // Wenn nur ein Zeitstempel vorhanden ist, akzeptiere das neue Event
+  if (newTimestamp && !currentTimestamp) return true;
+  if (!newTimestamp && currentTimestamp) return false;
+  
+  // FALLBACK: Wenn keine Zeitstempel, verwende String-Vergleich
+  // Nur akzeptieren wenn das neue Event wirklich anders ist UND länger (neuere Events sind oft detaillierter)
+  const isDifferent = newEvent !== currentEvent;
+  const isLonger = newEvent.length > currentEvent.length;
+  
+  console.log('[chronological-fallback]', {
+    isDifferent: isDifferent,
+    isLonger: isLonger,
+    newLength: newEvent.length,
+    currentLength: currentEvent.length,
+    shouldAccept: isDifferent && isLonger
+  });
+  
+  return isDifferent && isLonger;
+}
+
+// Prüfe ob ein Event chronologisch neuer ist (verhindert Pendulum)
+function isNewerEvent(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Extrahiere Zeitstempel aus beiden Events
+  const newTimestamp = extractEventTimestamp(newEvent);
+  const currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  console.log('[isNewerEvent] Server:', {
+    newEvent: newEvent,
+    currentEvent: currentEvent,
+    newTimestamp: newTimestamp,
+    currentTimestamp: currentTimestamp,
+    isNewer: newTimestamp && currentTimestamp ? newTimestamp > currentTimestamp : false
+  });
+  
+  // Wenn beide Zeitstempel vorhanden sind, vergleiche sie
+  if (newTimestamp && currentTimestamp) {
+    return newTimestamp > currentTimestamp;
+  }
+  
+  // Wenn nur ein Zeitstempel vorhanden ist, akzeptiere das neue Event
+  if (newTimestamp && !currentTimestamp) return true;
+  if (!newTimestamp && currentTimestamp) return false;
+  
+  // FALLBACK: Wenn keine Zeitstempel, nur akzeptieren wenn Events wirklich unterschiedlich sind
+  // UND das neue Event länger ist (neuere Events sind oft detaillierter)
+  const isDifferent = newEvent !== currentEvent;
+  const isLonger = newEvent.length > currentEvent.length;
+  
+  console.log('[isNewerEvent] Fallback:', {
+    isDifferent: isDifferent,
+    isLonger: isLonger,
+    newLength: newEvent.length,
+    currentLength: currentEvent.length,
+    shouldAccept: isDifferent && isLonger
+  });
+  
+  return isDifferent && isLonger;
+}
+
 
 function readSponsorLogos() {
   const files = fs.readdirSync(LOGO_DIR)
     .filter(f => /\.(png|jpe?g|gif|svg|webp)$/i.test(f))
     .map(f => `/assets/logos/${encodeURIComponent(f)}`);
-  logos = files;
-  console.log(`[logos] ${logos.length} Sponsorlogos`);
+  console.log(`[logos] ${files.length} Sponsorlogos`);
 }
 readSponsorLogos();
 chokidar.watch(LOGO_DIR, { ignoreInitial: true })
@@ -55,7 +270,12 @@ chokidar.watch(LOGO_DIR, { ignoreInitial: true })
   .on('unlink', readSponsorLogos)
   .on('change', readSponsorLogos);
 
-app.get('/api/logos', (req, res) => res.json({ logos }));
+app.get('/api/logos', (req, res) => {
+  const files = fs.readdirSync(LOGO_DIR)
+    .filter(f => /\.(png|jpe?g|gif|svg|webp)$/i.test(f))
+    .map(f => `/assets/logos/${encodeURIComponent(f)}`);
+  res.json({ logos: files });
+});
 
 app.get('/api/score', (req, res) => res.json(readJSON(SCORE_FILE, {})));
 app.post('/api/score', (req, res) => {
@@ -67,16 +287,18 @@ app.post('/api/score', (req, res) => {
 
 app.get('/api/config', (req, res) => {
   // Entferne referer aus der Antwort, da er nicht mehr benötigt wird
-  const { referer, ...configWithoutReferer } = CONFIG;
+  const config = readJSON(CONFIG_FILE, {});
+  const { referer, ...configWithoutReferer } = config;
   res.json(configWithoutReferer);
 });
 app.post('/api/config', (req, res) => {
   // Entferne referer aus der Konfiguration, da er nicht mehr benötigt wird
   const { referer, ...configWithoutReferer } = req.body;
-  CONFIG = { ...CONFIG, ...configWithoutReferer };
-  writeJSON(CONFIG_FILE, CONFIG);
+  const currentConfig = readJSON(CONFIG_FILE, {});
+  const newConfig = { ...currentConfig, ...configWithoutReferer };
+  writeJSON(CONFIG_FILE, newConfig);
   startFetcher();
-  res.json({ ok: true, config: CONFIG });
+  res.json({ ok: true, config: newConfig });
 });
 
 app.get('/overlay', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'overlay.html')));
@@ -169,7 +391,6 @@ async function parseTickerHTML(html, baseUrl) {
   const cheerio = require('cheerio');
   const $ = cheerio.load(html);
   
-  console.log('[debug] Parsing HTML ticker page...');
 
   // Teamnamen aus der Seite extrahieren
   let homeTeam = 'Heim', awayTeam = 'Gast';
@@ -365,18 +586,6 @@ async function parseTickerHTML(html, baseUrl) {
   }
   
   // Debug: Log nur das neueste Event
-  console.log('[debug] Events found:', allEvents.length);
-  if (allEvents.length > 0) {
-    const newestEvent = allEvents.first();
-    const timeEl = newestEvent.find('.tik3-even-item-meta-state-text');
-    const iconEl = newestEvent.find('.tik3-event-item-icon img');
-    
-    if (timeEl.length && iconEl.length) {
-      const timeText = timeEl.text().trim();
-      const iconAlt = iconEl.attr('alt');
-      console.log(`[debug] Neuestes Event: ${timeText} - ${iconAlt}`);
-    }
-  }
   
   // WICHTIG: Wenn keine Events gefunden wurden, extrahiere trotzdem die Hauptdaten
   if (allEvents.length === 0) {
@@ -474,21 +683,50 @@ async function parseTickerHTML(html, baseUrl) {
   
   // Die Events werden bereits in der parseTickerHTML Funktion erkannt
   // Wir verwenden sie direkt aus der bereits geparsten HTML-Struktur
-  console.log('[debug] Verwende bereits erkannte Events...');
   
   // Verwende die bereits erkannten Events aus der parseTickerHTML Funktion
   if (allEvents.length > 0) {
-    // Verwende das neueste Event (erstes in der Liste)
-    const firstEvent = allEvents.first();
+    // INTELLIGENTE EVENT-AUSWAHL: Finde das chronologisch neueste Event
+    let newestEvent = null;
+    let newestTime = 0;
+    
+    allEvents.each((index, element) => {
+      const $event = $(element);
+      const timeEl = $event.find('.tik3-even-item-meta-state-text');
+      const iconEl = $event.find('.tik3-event-item-icon img');
+      
+      if (timeEl.length && iconEl.length) {
+        const timeText = timeEl.text().trim();
+        const iconAlt = iconEl.attr('alt');
+        
+        // Konvertiere Zeit zu Sekunden für Vergleich
+        let timeInSeconds = 0;
+        if (timeText && timeText !== '') {
+          const timeMatch = timeText.match(/(\d{1,2}):(\d{2})/);
+          if (timeMatch) {
+            const minutes = parseInt(timeMatch[1]);
+            const seconds = parseInt(timeMatch[2]);
+            timeInSeconds = minutes * 60 + seconds;
+          }
+        }
+        
+        // Wähle das Event mit der höchsten Zeit (neuestes)
+        if (timeInSeconds > newestTime) {
+          newestTime = timeInSeconds;
+          newestEvent = $event;
+        }
+      }
+    });
+    
+    // Fallback: Wenn kein Event mit Zeit gefunden, nimm das erste
+    if (!newestEvent) {
+      newestEvent = allEvents.first();
+    }
+    
+    const firstEvent = newestEvent;
     const timeEl = firstEvent.find('.tik3-even-item-meta-state-text');
     const iconEl = firstEvent.find('.tik3-event-item-icon img');
     
-    // Debug: Logge das Event für bessere Diagnose
-    console.log('[debug] Verarbeite Event:', {
-      timeText: timeEl.text().trim(),
-      iconAlt: iconEl.attr('alt'),
-      eventHtml: firstEvent.html().substring(0, 100)
-    });
     
     if (timeEl.length && iconEl.length) {
       const timeText = timeEl.text().trim();
@@ -519,16 +757,9 @@ async function parseTickerHTML(html, baseUrl) {
         eventText = eventText.replace(/(.+?)\1{2,}/g, '$1');
       }
       
-      console.log('[debug] Event-Details:', {
-        timeText: timeText,
-        iconAlt: iconAlt,
-        eventText: eventText,
-        eventTextEl: eventTextEl.length,
-        firstEventHtml: firstEvent.html().substring(0, 200)
-      });
-      
       // Erstelle detailliertes Event-Format basierend auf Event-Typ
       let detailedEvent = '';
+      
       
       if (iconAlt === 'Tor') {
         // Tor: "Zeit - Tor durch [Spieler] für [Team]"
@@ -537,27 +768,32 @@ async function parseTickerHTML(html, baseUrl) {
           let playerName = '';
           let teamInfo = '';
           
-          // Parse "Tor durch 9. (TV Wickede-Ruhr 2)" Format
-          const torMatch = eventText.match(/Tor durch ([^(]+)\s*\(([^)]+)\)/);
-          if (torMatch) {
-            playerName = torMatch[1].trim();
-            const teamName = torMatch[2].trim();
-            
-            // Bestimme Team basierend auf Team-Namen
-            if (teamName.toLowerCase().includes(homeTeam.toLowerCase())) {
-              teamInfo = '(Heim)';
-            } else if (teamName.toLowerCase().includes(awayTeam.toLowerCase())) {
-              teamInfo = '(Gast)';
-            } else {
-              teamInfo = `(${teamName})`;
-            }
-            
-            detailedEvent = `${timeText} - Tor durch ${playerName} ${teamInfo}`;
-            lastScorer = playerName;
-          } else {
-            // Fallback: Verwende den gesamten Event-Text
+          // Prüfe ob es ein 7-Meter-Tor ist
+          if (eventText.includes('7-Meter') || eventText.includes('Siebenmeter')) {
+            // 7-Meter-Tor: Behalte den ursprünglichen Text bei
             detailedEvent = `${timeText} - ${eventText}`;
-            lastScorer = eventText;
+            // Extrahiere Spielername für lastScorer
+            const playerMatch = eventText.match(/durch\s+([^(]+)\s*\(/);
+            if (playerMatch) {
+              lastScorer = playerMatch[1].trim();
+            } else {
+              lastScorer = eventText;
+            }
+          } else {
+            // Normales Tor: Parse "Tor durch 9. (TV Wickede-Ruhr 2)" Format
+            const torMatch = eventText.match(/Tor durch ([^(]+)\s*\(([^)]+)\)/);
+            if (torMatch) {
+              playerName = torMatch[1].trim();
+              const teamName = torMatch[2].trim();
+              
+              // BEHALTE den ursprünglichen Team-Namen für normale Tore
+              detailedEvent = `${timeText} - Tor durch ${playerName} (${teamName})`;
+              lastScorer = playerName;
+            } else {
+              // Fallback: Verwende den gesamten Event-Text
+              detailedEvent = `${timeText} - ${eventText}`;
+              lastScorer = eventText;
+            }
           }
         } else {
           detailedEvent = `${timeText} - Tor`;
@@ -608,12 +844,9 @@ async function parseTickerHTML(html, baseUrl) {
                    detailedEvent += ` (${eventText})`;
                  }
                }
+               
       
-               // Stabilisierung: Nur aktualisieren wenn sich das Event wirklich geändert hat
-               const currentData = readJSON(SCORE_FILE, {});
-               const currentLastEvent = currentData.lastEvent || '';
-
-               // Temporär: Immer aktualisieren für Debugging
+               // Event wird sofort gesetzt - keine Stabilisierung nötig
                lastEvent = detailedEvent;
                console.log('[debug] lastEvent gesetzt:', lastEvent);
       
@@ -681,14 +914,17 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
 
-  console.log(`[debug] HTML Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Period: ${period}`);
 
   return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl };
 }
 
 // Eine Sekunde Polling – erkennt JSON automatisch
 async function fetchOnce() {
-  const { tickerUrl } = CONFIG;
+  // Schreibsperre gegen Race Conditions
+  // Write-Lock entfernt - verhindert Caching
+  
+  const config = readJSON(CONFIG_FILE, {});
+  const { tickerUrl } = config;
   if (!tickerUrl) return;
 
   // Header vorbereiten für handball.net
@@ -722,33 +958,85 @@ async function fetchOnce() {
     // ***** JSON-API versuchen (falls verfügbar) *****
     if (isApiLike && ct.includes('application/json')) {
       const json = await res.json();
-      const cur = readJSON(SCORE_FILE, {});
-      const parsed = parseCombinedJSON(json, cur);
+      // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
+      const parsed = parseCombinedJSON(json, {});
 
       // Logos automatisch übernehmen
-      if (parsed.homeLogoUrl) CONFIG.homeLogoUrl = parsed.homeLogoUrl;
-      if (parsed.awayLogoUrl) CONFIG.awayLogoUrl = parsed.awayLogoUrl;
-      writeJSON(CONFIG_FILE, CONFIG);
+      const config = readJSON(CONFIG_FILE, {});
+      if (parsed.homeLogoUrl) config.homeLogoUrl = parsed.homeLogoUrl;
+      if (parsed.awayLogoUrl) config.awayLogoUrl = parsed.awayLogoUrl;
+      writeJSON(CONFIG_FILE, config);
 
       // Plausibilitätsbremse gegen „38:0"-Quatsch
       if (parsed.homeGoals > 80 || parsed.awayGoals > 80) {
         console.warn('[ticker] Ignoring implausible score:', parsed.homeGoals, parsed.awayGoals);
         return;
       }
-
+      
+      // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
+      console.log('[ticker] Writing JSON data:', {
+        homeTeam: parsed.homeTeam,
+        awayTeam: parsed.awayTeam,
+        homeGoals: parsed.homeGoals,
+        awayGoals: parsed.awayGoals,
+        lastEvent: parsed.lastEvent
+      });
+      
+      writeJSON(SCORE_FILE, {
+        homeTeam: parsed.homeTeam,
+        awayTeam: parsed.awayTeam,
+        homeGoals: parsed.homeGoals,
+        awayGoals: parsed.awayGoals,
+        period: parsed.period,
+        lastScorer: parsed.lastScorer,
+        lastEvent: parsed.lastEvent,
+        gameStatus: parsed.gameStatus,
+        homeLogoUrl: parsed.homeLogoUrl || '',
+        awayLogoUrl: parsed.awayLogoUrl || ''
+      });
+      
+      console.log('[ticker]', `${parsed.homeTeam} ${parsed.homeGoals}:${parsed.awayGoals} ${parsed.awayTeam} | ${parsed.period}`);
+      return;
+      
+      console.log('[DEBUG-PENDULUM] JSON Detection:', {
+        isGameSwitch: isGameSwitch,
+        shouldUpdateEvent: shouldUpdateEvent,
+        shouldUpdateScore: shouldUpdateScore,
+        newEvent: newEventData,
+        currentEvent: currentEventData,
+        newScore: newScoreData,
+        currentScore: currentScoreData,
+        newTimestamp: extractEventTimestamp(newEventData),
+        currentTimestamp: extractEventTimestamp(currentEventData),
+        newTeams: `${parsed.homeTeam} vs ${parsed.awayTeam}`,
+        currentTeams: `${cur.homeTeam} vs ${cur.awayTeam}`,
+        eventComparison: {
+          newEventLength: newEventData ? newEventData.length : 0,
+          currentEventLength: currentEventData ? currentEventData.length : 0,
+          areEqual: newEventData === currentEventData,
+          newEventTrimmed: newEventData ? newEventData.trim() : '',
+          currentEventTrimmed: currentEventData ? currentEventData.trim() : ''
+        }
+      });
+      
+      // Intelligente Daten-Merging: Sofortige Updates ohne Verzögerung
       const next = {
         homeTeam: parsed.homeTeam || cur.homeTeam || 'Heim',
         awayTeam: parsed.awayTeam || cur.awayTeam || 'Gast',
-        homeGoals: Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0),
-        awayGoals: Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0),
+        homeGoals: shouldUpdateScore ? (Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0)) : (cur.homeGoals|0),
+        awayGoals: shouldUpdateScore ? (Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0)) : (cur.awayGoals|0),
         clock: parsed.clock || cur.clock || '00:00',
         period: parsed.period || cur.period || '',
         lastScorer: parsed.lastScorer || cur.lastScorer || '',
-        // Stabile lastEvent: Nur aktualisieren wenn sich wirklich etwas geändert hat
-        lastEvent: (parsed.lastEvent && parsed.lastEvent !== cur.lastEvent) ? parsed.lastEvent : (cur.lastEvent || ''),
+        // Intelligente lastEvent: Nur bei neueren Events
+        lastEvent: shouldUpdateEvent ? newEventData.trim() : (cur.lastEvent || ''),
         // Stabile gameStatus: Nur aktualisieren wenn sich der Status geändert hat
-        gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus) ? parsed.gameStatus : (cur.gameStatus || 'Live')
+        gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus && parsed.gameStatus.trim() !== '') ? parsed.gameStatus : (cur.gameStatus || 'Live')
       };
+      
+      // Keine alten Stabilitätsprüfungen mehr - intelligente Erkennung reicht
+      
+      // Schreibsperre aktivieren
       writeJSON(SCORE_FILE, next);
       console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
       return;
@@ -758,7 +1046,6 @@ async function fetchOnce() {
     console.log('[ticker] Using HTML parsing for:', tickerUrl);
     const html = await res.text();
     const parsed = await parseTickerHTML(html, tickerUrl);
-    const cur = readJSON(SCORE_FILE, {});
     
     // WICHTIG: Wenn Parser null zurückgibt (keine Events), behalte die aktuellen Daten
     if (parsed === null) {
@@ -766,66 +1053,77 @@ async function fetchOnce() {
       return; // Don't update, keep current data
     }
     
-    // WICHTIG: Bei neuen Spielen ohne Events, aktualisiere trotzdem die Hauptdaten
-    if (parsed.homeGoals === 0 && parsed.awayGoals === 0 && parsed.clock === '00:00') {
-      console.log('[ticker] New game detected (no events yet), updating main data');
-      // Aktualisiere trotzdem die Hauptdaten (Teams, etc.)
-    }
-    
-    // WICHTIG: Verhindere Flickering bei instabilen Daten
-    // Wenn die neuen Daten deutlich von den aktuellen abweichen, prüfe die Plausibilität
-    const currentData = readJSON(SCORE_FILE, {});
-    if (currentData.homeGoals > 0 || currentData.awayGoals > 0) {
-      // Wenn bereits Tore vorhanden sind, aber neue Daten 0:0 zeigen, 
-      // könnte das ein Fehler sein - behalte die aktuellen Daten
-      if (parsed.homeGoals === 0 && parsed.awayGoals === 0 && parsed.clock === '00:00') {
-        console.log('[ticker] Suspicious data (0:0 when goals exist), keeping current data');
-        return; // Don't update, keep current data
-      }
-      
-      // WICHTIG: Verhindere auch Sprünge zwischen verschiedenen Spielständen
-      // ABER: Nur wenn es wirklich ein neues Spiel ist (z.B. andere Teams)
-      const currentTotal = currentData.homeGoals + currentData.awayGoals;
-      const newTotal = parsed.homeGoals + parsed.awayGoals;
-      
-      // Nur verdächtig wenn es das gleiche Spiel ist UND der Stand deutlich niedriger ist
-      const isSameGame = (parsed.homeTeam === currentData.homeTeam && parsed.awayTeam === currentData.awayTeam);
-      
-      // AUSKOMMENTIERT: Diese Logik verhindert korrekte Updates
-      // if (isSameGame && newTotal < currentTotal && newTotal > 0) {
-      //   console.log(`[ticker] Suspicious data (${parsed.homeGoals}:${parsed.awayGoals} when ${currentData.homeGoals}:${currentData.awayGoals} exists), keeping current data`);
-      //   return; // Don't update, keep current data
-      // }
-      
-      // Wenn es ein anderes Spiel ist, aktualisiere trotzdem
-      if (!isSameGame) {
-        console.log('[ticker] Different game detected, updating data');
-      }
-    }
-    
     // Logos automatisch übernehmen
-    if (parsed.homeLogoUrl) CONFIG.homeLogoUrl = parsed.homeLogoUrl;
-    if (parsed.awayLogoUrl) CONFIG.awayLogoUrl = parsed.awayLogoUrl;
-    writeJSON(CONFIG_FILE, CONFIG);
+    const config = readJSON(CONFIG_FILE, {});
+    if (parsed.homeLogoUrl) config.homeLogoUrl = parsed.homeLogoUrl;
+    if (parsed.awayLogoUrl) config.awayLogoUrl = parsed.awayLogoUrl;
+    writeJSON(CONFIG_FILE, config);
     
+    // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
+    
+    writeJSON(SCORE_FILE, {
+      homeTeam: parsed.homeTeam,
+      awayTeam: parsed.awayTeam,
+      homeGoals: parsed.homeGoals,
+      awayGoals: parsed.awayGoals,
+      period: parsed.period,
+      lastScorer: parsed.lastScorer,
+      lastEvent: parsed.lastEvent,
+      gameStatus: parsed.gameStatus,
+      homeLogoUrl: parsed.homeLogoUrl || '',
+      awayLogoUrl: parsed.awayLogoUrl || ''
+    });
+    
+    console.log('[ticker]', `${parsed.homeTeam} ${parsed.homeGoals}:${parsed.awayGoals} ${parsed.awayTeam} | ${parsed.period}`);
+    return;
+    
+    console.log('[DEBUG-PENDULUM] HTML Detection:', {
+      isGameSwitch: isGameSwitch,
+      shouldUpdateEvent: shouldUpdateEvent,
+      shouldUpdateScore: shouldUpdateScore,
+      newEvent: newEventData,
+      currentEvent: currentEventData,
+      newScore: newScoreData,
+      currentScore: currentScoreData,
+      newTimestamp: extractEventTimestamp(newEventData),
+      currentTimestamp: extractEventTimestamp(currentEventData),
+      newTeams: `${parsed.homeTeam} vs ${parsed.awayTeam}`,
+      currentTeams: `${cur.homeTeam} vs ${cur.awayTeam}`,
+      eventComparison: {
+        newEventLength: newEventData ? newEventData.length : 0,
+        currentEventLength: currentEventData ? currentEventData.length : 0,
+        areEqual: newEventData === currentEventData,
+        newEventTrimmed: newEventData ? newEventData.trim() : '',
+        currentEventTrimmed: currentEventData ? currentEventData.trim() : ''
+      }
+    });
+    
+    // Intelligente Daten-Merging: Sofortige Updates ohne Verzögerung
     const next = {
       homeTeam: parsed.homeTeam || cur.homeTeam || 'Heim',
       awayTeam: parsed.awayTeam || cur.awayTeam || 'Gast',
-      homeGoals: Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0),
-      awayGoals: Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0),
+      homeGoals: shouldUpdateScore ? (Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0)) : (cur.homeGoals|0),
+      awayGoals: shouldUpdateScore ? (Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0)) : (cur.awayGoals|0),
       // clock entfernt - Zeit ist bereits in lastEvent enthalten
       period: parsed.period || cur.period || '',
       lastScorer: parsed.lastScorer || cur.lastScorer || '',
-      // lastEvent: Immer aktualisieren wenn verfügbar
-      lastEvent: parsed.lastEvent || cur.lastEvent || '',
-      // gameStatus: Immer aktualisieren wenn verfügbar
-      gameStatus: parsed.gameStatus || cur.gameStatus || 'Live'
+      // Intelligente lastEvent: Nur bei neueren Events
+      lastEvent: shouldUpdateEvent ? newEventData.trim() : (cur.lastEvent || ''),
+      // Stabile gameStatus: Nur aktualisieren wenn sich der Status geändert hat
+      gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus && parsed.gameStatus.trim() !== '') ? parsed.gameStatus : (cur.gameStatus || 'Live')
     };
     
-    console.log('[debug] Writing to score.json:', {
+    // Keine alten Stabilitätsprüfungen mehr - intelligente Erkennung reicht
+    
+    console.log('[DEBUG-PENDULUM] Writing to score.json:', {
       lastEvent: next.lastEvent,
       lastScorer: next.lastScorer,
-      gameStatus: next.gameStatus
+      gameStatus: next.gameStatus,
+      homeGoals: next.homeGoals,
+      awayGoals: next.awayGoals,
+      timestamp: new Date().toISOString(),
+      shouldUpdateEvent: shouldUpdateEvent,
+      shouldUpdateScore: shouldUpdateScore
     });
 
     // Bremse
@@ -834,6 +1132,7 @@ async function fetchOnce() {
       return;
     }
 
+    // Schreibsperre aktivieren
     writeJSON(SCORE_FILE, next);
     // Clock entfernt - Zeit wird aus lastEvent extrahiert
     console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
@@ -845,9 +1144,10 @@ async function fetchOnce() {
 
 function startFetcher() {
   if (fetchTimer) clearInterval(fetchTimer);
-  if (CONFIG.tickerUrl) {
-    fetchTimer = setInterval(fetchOnce, 500); // alle 500ms für schnellere Updates
-    console.log('[ticker] running:', CONFIG.tickerUrl);
+  const config = readJSON(CONFIG_FILE, {});
+  if (config.tickerUrl) {
+    fetchTimer = setInterval(fetchOnce, 750); // alle 750ms für schnellere Updates
+    console.log('[ticker] running:', config.tickerUrl);
   } else {
     console.log('[ticker] idle (no URL)');
   }

@@ -1,13 +1,230 @@
 function $(s){ return document.querySelector(s); }
 var lastScorerSeen = "";
 var playerDisplayTimeout = null;
-var lastEventSeen = "";
-var lastEventText = "";
 var stableEventText = "";
+
+// Client-seitige Debouncing gegen Race Conditions
+var lastClientUpdate = 0;
+var CLIENT_UPDATE_INTERVAL = 500; // Mindestens 500ms zwischen Client-Updates
+
+// Intelligente Event-Erkennung ohne Verzögerung
+var lastKnownEvent = "";
+var lastKnownScore = { homeGoals: 0, awayGoals: 0 };
+
+// Client-seitige Event-Stabilitätsprüfung
+var clientEventStabilityCount = 0;
+var CLIENT_EVENT_STABILITY_THRESHOLD = 1; // Weniger restriktiv
+
+// Client-seitige Event-Format-Normalisierung
+function normalizeClientEventFormat(event) {
+  if (!event || event.trim() === '') return '';
+  
+  // Normalisiere Whitespace
+  var normalized = event.trim().replace(/\s+/g, ' ');
+  
+  // Normalisiere Zeitstempel-Format (z.B. "36:36" -> "36:36")
+  normalized = normalized.replace(/(\d{1,2}):(\d{2})/g, function(match, minutes, seconds) {
+    return minutes + ':' + seconds;
+  });
+  
+  // Normalisiere Tor-Format
+  normalized = normalized.replace(/Tor\s+durch\s+/g, 'Tor durch ');
+  
+  return normalized;
+}
+
+// Client-seitige intelligente Event-Erkennung
+function checkClientEventStability(newEvent, currentEvent) {
+  // Normalisiere Events für Vergleich
+  var normalizedNewEvent = normalizeClientEventFormat(newEvent);
+  var normalizedCurrentEvent = normalizeClientEventFormat(currentEvent);
+  
+  // Wenn das Event identisch ist, erhöhe den Stabilitätszähler
+  if (normalizedNewEvent === normalizedCurrentEvent && normalizedNewEvent.trim() !== '') {
+    clientEventStabilityCount++;
+    console.log(`[client-event-stability] Event stable ${clientEventStabilityCount}/${CLIENT_EVENT_STABILITY_THRESHOLD}: ${normalizedNewEvent}`);
+    
+    // Wenn Event stabil genug ist, akzeptiere es
+    if (clientEventStabilityCount >= CLIENT_EVENT_STABILITY_THRESHOLD) {
+      return true;
+    }
+    return false;
+  } else {
+    // Event hat sich geändert - prüfe ob es ein echtes neues Event ist
+    var isRealNewEvent = isClientRealNewEvent(newEvent, currentEvent);
+    
+    if (isRealNewEvent) {
+      // Echtes neues Event - sofort akzeptieren
+      clientEventStabilityCount = 0;
+      console.log(`[client-event-stability] Real new event detected: ${normalizedCurrentEvent} -> ${normalizedNewEvent}`);
+      return true;
+    } else {
+      // Möglicher Pendulum-Effekt - reset Stabilitätszähler
+      clientEventStabilityCount = 0;
+      console.log(`[client-event-stability] Possible pendulum, reset counter: ${normalizedCurrentEvent} -> ${normalizedNewEvent}`);
+      return false;
+    }
+  }
+}
+
+// Client-seitige Prüfung ob es ein echtes neues Event ist
+function isClientRealNewEvent(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Extrahiere Zeitstempel aus beiden Events
+  var newTimestamp = extractEventTimestamp(newEvent);
+  var currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  // Wenn neue Zeitstempel vorhanden sind, vergleiche sie
+  if (newTimestamp && currentTimestamp) {
+    return newTimestamp > currentTimestamp;
+  }
+  
+  // Fallback: Vergleiche Text-Länge (neuere Events sind oft länger)
+  return newEvent.length > currentEvent.length;
+}
+
+// Prüfe ob ein Event chronologisch neuer ist
+function isChronologicallyNewer(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Extrahiere Zeitstempel aus beiden Events
+  var newTimestamp = extractEventTimestamp(newEvent);
+  var currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  console.log('[chronological-check] Client:', {
+    newEvent: newEvent,
+    currentEvent: currentEvent,
+    newTimestamp: newTimestamp,
+    currentTimestamp: currentTimestamp,
+    isNewer: newTimestamp && currentTimestamp ? newTimestamp > currentTimestamp : false
+  });
+  
+  // Wenn beide Zeitstempel vorhanden sind, vergleiche sie
+  if (newTimestamp && currentTimestamp) {
+    return newTimestamp > currentTimestamp;
+  }
+  
+  // Wenn nur ein Zeitstempel vorhanden ist, akzeptiere das neue Event
+  if (newTimestamp && !currentTimestamp) return true;
+  if (!newTimestamp && currentTimestamp) return false;
+  
+  // FALLBACK: Wenn keine Zeitstempel, verwende String-Vergleich
+  // Nur akzeptieren wenn das neue Event wirklich anders ist UND länger (neuere Events sind oft detaillierter)
+  var isDifferent = newEvent !== currentEvent;
+  var isLonger = newEvent.length > currentEvent.length;
+  
+  console.log('[chronological-fallback] Client:', {
+    isDifferent: isDifferent,
+    isLonger: isLonger,
+    newLength: newEvent.length,
+    currentLength: currentEvent.length,
+    shouldAccept: isDifferent && isLonger
+  });
+  
+  return isDifferent && isLonger;
+}
+
+// Prüfe ob ein Event stabil ist (verhindert Pendulum)
+var lastStableEvent = '';
+var eventStabilityCount = 0;
+var EVENT_STABILITY_THRESHOLD = 3; // Event muss 3x hintereinander gleich sein
+
+function isEventStable(newEvent, currentEvent) {
+  if (!newEvent || !currentEvent) return true;
+  
+  // Wenn Event sich geändert hat, reset counter
+  if (newEvent !== lastStableEvent) {
+    lastStableEvent = newEvent;
+    eventStabilityCount = 1;
+    console.log('[event-stability] Client: Event changed, reset counter:', {
+      newEvent: newEvent,
+      currentEvent: currentEvent,
+      stabilityCount: eventStabilityCount
+    });
+    return false; // Noch nicht stabil
+  }
+  
+  // Event ist gleich, erhöhe counter
+  eventStabilityCount++;
+  
+  console.log('[event-stability] Client: Event stable:', {
+    newEvent: newEvent,
+    currentEvent: currentEvent,
+    stabilityCount: eventStabilityCount,
+    threshold: EVENT_STABILITY_THRESHOLD,
+    isStable: eventStabilityCount >= EVENT_STABILITY_THRESHOLD
+  });
+  
+  // Nur akzeptieren wenn Event mehrfach stabil war
+  return eventStabilityCount >= EVENT_STABILITY_THRESHOLD;
+}
 
 /* einfache JSON-Fetch-Funktion */
 function j(url){
   return fetch(url, { cache: "no-store" }).then(function(r){ return r.json(); });
+}
+
+/* Intelligente Event-Erkennung basierend auf Timestamps */
+function extractEventTimestamp(eventText) {
+  if (!eventText) return null;
+  
+  // Extrahiere Zeitstempel aus Event-Text (z.B. "21:22 - Tor durch...")
+  var timeMatch = eventText.match(/^(\d{1,2}:\d{2})/);
+  if (timeMatch) {
+    var timeStr = timeMatch[1];
+    var timeParts = timeStr.split(':');
+    var minutes = parseInt(timeParts[0]);
+    var seconds = parseInt(timeParts[1]);
+    // Konvertiere zu Sekunden seit Spielbeginn
+    return minutes * 60 + seconds;
+  }
+  return null;
+}
+
+function isNewerEvent(newEvent, currentEvent) {
+  var newTimestamp = extractEventTimestamp(newEvent);
+  var currentTimestamp = extractEventTimestamp(currentEvent);
+  
+  if (!newTimestamp || !currentTimestamp) {
+    // Fallback: Vergleiche Text-Länge (neuere Events sind oft länger)
+    return newEvent.length > currentEvent.length;
+  }
+  
+  return newTimestamp > currentTimestamp;
+}
+
+function isNewerScore(newScore, currentScore) {
+  var newTotal = newScore.homeGoals + newScore.awayGoals;
+  var currentTotal = currentScore.homeGoals + currentScore.awayGoals;
+  
+  // Nur wenn die Gesamtzahl der Tore gestiegen ist
+  return newTotal > currentTotal;
+}
+
+// Spielwechsel-Erkennung
+function isGameChange(newData, currentData) {
+  var newTeams = (newData.homeTeam || '') + ' vs ' + (newData.awayTeam || '');
+  var currentTeams = (currentData.homeTeam || '') + ' vs ' + (currentData.awayTeam || '');
+  
+  // Prüfe ob sich die Team-Namen geändert haben
+  var teamChanged = newTeams !== currentTeams && newTeams !== ' vs ' && currentTeams !== ' vs ';
+  
+  // Prüfe ob sich der Score drastisch geändert hat (möglicher Spielwechsel)
+  var newTotal = (newData.homeGoals || 0) + (newData.awayGoals || 0);
+  var currentTotal = (currentData.homeGoals || 0) + (currentData.awayGoals || 0);
+  var scoreReset = newTotal < currentTotal && newTotal <= 2; // Score wurde zurückgesetzt
+  
+  console.log('[game-change-detection] Client:', {
+    teamChanged: teamChanged,
+    scoreReset: scoreReset,
+    newTeams: newTeams,
+    currentTeams: currentTeams,
+    newTotal: newTotal,
+    currentTotal: currentTotal
+  });
+  
+  return teamChanged || scoreReset;
 }
 
 /* Sponsor-Rotation verwalten */
@@ -85,102 +302,160 @@ function setLogo(el, url){
   }
 }
 
-/* Score aktualisieren */
+/* Score aktualisieren mit intelligenter Event-Erkennung */
 function refreshScore(){
+  // Client-seitige Debouncing gegen Race Conditions
+  var now = Date.now();
+  if (now - lastClientUpdate < CLIENT_UPDATE_INTERVAL) {
+    console.log('[client] Skipping update - too soon');
+    return Promise.resolve();
+  }
+  lastClientUpdate = now;
+  
   return j("/api/score")
     .then(function(s){
-      setIf($("#homeTeam"), s.homeTeam, "Heim");
-      setIf($("#awayTeam"), s.awayTeam, "Gast");
-      setIf($("#homeGoals"), s.homeGoals, 0);
-      setIf($("#awayGoals"), s.awayGoals, 0);
-      // Clock entfernt - Zeit wird aus lastEvent extrahiert
+      // Aktuelle DOM-Werte lesen
+      var currentHomeTeam = $("#homeTeam").textContent || "";
+      var currentAwayTeam = $("#awayTeam").textContent || "";
+      var currentHomeGoals = parseInt($("#homeGoals").textContent) || 0;
+      var currentAwayGoals = parseInt($("#awayGoals").textContent) || 0;
+      var currentEvent = $("#lastEvent").textContent || "";
+      var currentStatus = $("#gameStatus").textContent || "";
       
-      // Status und Ereignis aktualisieren
-      updateGameStatus(s);
-      updateLastEvent(s);
-
-      return j("/api/config")
-        .then(function(cfg){
-          setLogo($("#homeLogo"), (cfg && cfg.homeLogoUrl) ? cfg.homeLogoUrl : "");
-          setLogo($("#awayLogo"), (cfg && cfg.awayLogoUrl) ? cfg.awayLogoUrl : "");
-
-          if (s.lastScorer && s.lastScorer !== lastScorerSeen){
-            lastScorerSeen = s.lastScorer;
-            
-            // Score-Sektion Flash-Effekt
-            var section = $(".score-section");
-            if (section){
-              section.classList.add("flash");
-              setTimeout(function(){ section.classList.remove("flash"); }, 1800);
-            }
-            
-            // Gesamter Balken Tor-Animation mit Team-Erkennung
-            var broadcastBar = $(".broadcast-container");
-            if (broadcastBar){
-              // Bestimme welches Team das Tor gemacht hat
-              var homeGoals = parseInt(s.homeGoals) || 0;
-              var awayGoals = parseInt(s.awayGoals) || 0;
-              var lastHomeGoals = parseInt($("#homeGoals").textContent) || 0;
-              var lastAwayGoals = parseInt($("#awayGoals").textContent) || 0;
-              
-              // Entferne alle vorherigen Tor-Klassen
-              broadcastBar.classList.remove("home-goal", "away-goal");
-              
-              // Bestimme welches Team das Tor gemacht hat
-              var isHomeGoal = homeGoals > lastHomeGoals;
-              var isAwayGoal = awayGoals > lastAwayGoals;
-              
-              // Prüfe ob es ein Tor von HSG Kastellaun/Simmern ist
-              var isOurTeam = (s.homeTeam && s.homeTeam.includes("HSG Kastellaun/Simmern")) || 
-                              (s.awayTeam && s.awayTeam.includes("HSG Kastellaun/Simmern"));
-              
-              console.log("Team Check:", {
-                homeTeam: s.homeTeam,
-                awayTeam: s.awayTeam,
-                isOurTeam: isOurTeam,
-                isHomeGoal: isHomeGoal,
-                isAwayGoal: isAwayGoal,
-                scorer: s.lastScorer
-              });
-              
-              if (isHomeGoal) {
-                broadcastBar.classList.add("goal-animation", "home-goal");
-                if (isOurTeam) {
-                  // Spieler-Anzeige für unser Team (HSG Kastellaun/Simmern) - kein Toast
-                  console.log("Showing player goal for our team");
-                  showPlayerGoal(s.lastScorer, false);
-                } else {
-                  // Kein Toast mehr für andere Teams
-                  console.log("Goal by other team - no display");
-                }
-              } else if (isAwayGoal) {
-                broadcastBar.classList.add("goal-animation", "away-goal");
-                if (isOurTeam) {
-                  // Spieler-Anzeige für unser Team (HSG Kastellaun/Simmern) - kein Toast
-                  console.log("Showing player goal for our team (away)");
-                  showPlayerGoal(s.lastScorer, false);
-                } else {
-                  // Kein Toast mehr für andere Teams
-                  console.log("Goal by other team (away) - no display");
-                }
-              } else {
-                broadcastBar.classList.add("goal-animation");
-                // Fallback - prüfe nochmal ob es unser Team ist
-                if (isOurTeam) {
-                  console.log("Fallback: Showing player goal for our team");
-                  showPlayerGoal(s.lastScorer, false);
-                } else {
-                  // Kein Toast mehr für andere Teams
-                  console.log("Fallback: Goal by other team - no display");
-                }
-              }
-              
-              setTimeout(function(){ 
-                broadcastBar.classList.remove("goal-animation", "home-goal", "away-goal"); 
-              }, 2000);
-            }
+      // Neue Daten aus Server
+      var newHomeGoals = parseInt(s.homeGoals) || 0;
+      var newAwayGoals = parseInt(s.awayGoals) || 0;
+      var newEvent = s.lastEvent || "";
+      var newStatus = s.gameStatus || "";
+      
+      // INTELLIGENTE EVENT-ERKENNUNG: Sofortige Updates basierend auf Timestamps
+      
+      // Prüfe ob es ein Spielwechsel ist
+      var isGameSwitch = isGameChange(s, {
+        homeTeam: currentHomeTeam,
+        awayTeam: currentAwayTeam
+      });
+      
+    // EINFACHE LÖSUNG: Nur akzeptieren wenn Event wirklich anders ist
+    var shouldUpdateEvent = newEvent && newEvent.trim() !== "" && 
+      (isGameSwitch || newEvent !== currentEvent);
+      
+      // AGGRESSIVE Score Updates: Immer updaten wenn sich der Score geändert hat
+      var newScoreData = { homeGoals: newHomeGoals, awayGoals: newAwayGoals };
+      var currentScoreData = { homeGoals: currentHomeGoals, awayGoals: currentAwayGoals };
+      var shouldUpdateScore = isGameSwitch || 
+        (newHomeGoals !== currentHomeGoals || newAwayGoals !== currentAwayGoals);
+      
+      // Datenstabilitätsprüfung: Verhindere Updates wenn Daten identisch sind
+      var isDataIdentical = (
+        newHomeGoals === currentHomeGoals &&
+        newAwayGoals === currentAwayGoals &&
+        newEvent === currentEvent &&
+        (s.homeTeam || '') === currentHomeTeam &&
+        (s.awayTeam || '') === currentAwayTeam
+      );
+      
+      if (isDataIdentical) {
+        console.log('[client] Skipping update - data identical');
+        return;
+      }
+      
+      
+      // Score-Update mit Tor-Animation
+      if (shouldUpdateScore) {
+        
+        // Tor-Animation nur bei echten Tor-Updates
+        var isRealGoal = (newHomeGoals > currentHomeGoals) || (newAwayGoals > currentAwayGoals);
+        
+        if (isRealGoal) {
+          console.log("Echtes Tor erkannt - Animation wird getriggert");
+          
+          // Score-Sektion Flash-Effekt
+          var section = $(".score-section");
+          if (section){
+            section.classList.add("flash");
+            setTimeout(function(){ section.classList.remove("flash"); }, 1800);
           }
-        });
+          
+          // Gesamter Balken Tor-Animation mit Team-Erkennung
+          var broadcastBar = $(".broadcast-container");
+          if (broadcastBar){
+            // Bestimme welches Team das Tor gemacht hat
+            var isHomeGoal = newHomeGoals > currentHomeGoals;
+            var isAwayGoal = newAwayGoals > currentAwayGoals;
+            
+            // Entferne alle vorherigen Tor-Klassen
+            broadcastBar.classList.remove("home-goal", "away-goal");
+            
+            // Prüfe ob es ein Tor von HSG Kastellaun/Simmern ist
+            var isOurTeam = (s.homeTeam && s.homeTeam.includes("HSG Kastellaun/Simmern")) || 
+                            (s.awayTeam && s.awayTeam.includes("HSG Kastellaun/Simmern"));
+            
+            console.log("Intelligente Tor-Animation:", {
+              homeTeam: s.homeTeam,
+              awayTeam: s.awayTeam,
+              isOurTeam: isOurTeam,
+              isHomeGoal: isHomeGoal,
+              isAwayGoal: isAwayGoal,
+              scorer: s.lastScorer,
+              newScore: newHomeGoals + ":" + newAwayGoals,
+              oldScore: currentHomeGoals + ":" + currentAwayGoals
+            });
+            
+            if (isHomeGoal) {
+              broadcastBar.classList.add("goal-animation", "home-goal");
+              if (isOurTeam && s.lastScorer) {
+                showPlayerGoal(s.lastScorer, false);
+              }
+            } else if (isAwayGoal) {
+              broadcastBar.classList.add("goal-animation", "away-goal");
+              if (isOurTeam && s.lastScorer) {
+                showPlayerGoal(s.lastScorer, false);
+              }
+            } else {
+              broadcastBar.classList.add("goal-animation");
+              if (isOurTeam && s.lastScorer) {
+                showPlayerGoal(s.lastScorer, false);
+              }
+            }
+            
+            setTimeout(function(){ 
+              broadcastBar.classList.remove("goal-animation", "home-goal", "away-goal"); 
+            }, 2000);
+          }
+        }
+        
+        setIf($("#homeGoals"), newHomeGoals, 0);
+        setIf($("#awayGoals"), newAwayGoals, 0);
+      }
+      
+      // Event-Update
+      if (shouldUpdateEvent) {
+        stableEventText = newEvent;
+        $("#lastEvent").textContent = newEvent;
+      }
+      
+      // Status-Update (ohne Stabilitätsprüfung, da sich selten ändert)
+      if (newStatus && newStatus.trim() !== "" && newStatus !== currentStatus) {
+        console.log("Status Update durchgeführt:", newStatus);
+        $("#gameStatus").textContent = newStatus;
+      }
+      
+      // Team-Namen (bei Spielwechsel oder Änderungen)
+      if (s.homeTeam && s.homeTeam !== currentHomeTeam && s.homeTeam.trim() !== "") {
+        console.log("Home Team Update:", currentHomeTeam, "->", s.homeTeam);
+        setIf($("#homeTeam"), s.homeTeam, "Heim");
+      }
+      if (s.awayTeam && s.awayTeam !== currentAwayTeam && s.awayTeam.trim() !== "") {
+        console.log("Away Team Update:", currentAwayTeam, "->", s.awayTeam);
+        setIf($("#awayTeam"), s.awayTeam, "Gast");
+      }
+
+      // Logos aus score.json laden (neue Logos werden automatisch übernommen)
+      setLogo($("#homeLogo"), (s && s.homeLogoUrl) ? s.homeLogoUrl : "");
+      setLogo($("#awayLogo"), (s && s.awayLogoUrl) ? s.awayLogoUrl : "");
+
+      // Tor-Animation-Logik entfernt - wird jetzt durch Stabilitätsprüfung kontrolliert
     })
     .catch(function(err){
       console.error("Score fetch error:", err);
@@ -270,86 +545,7 @@ function generateImageFileName(playerName) {
     .replace(/\s+/g, '_') + '.jpg';
 }
 
-/* Spiel-Status aktualisieren */
-function updateGameStatus(scoreData) {
-  var statusEl = $("#gameStatus");
-  if (!statusEl) return;
-  
-  var gameStatus = scoreData.gameStatus || "Live";
-  var period = scoreData.period || "";
-  var statusClass = "";
-  
-  // Fallback: Bestimme Status aus period falls gameStatus nicht verfügbar
-  if (!scoreData.gameStatus) {
-    if (period.includes("beendet") || period.includes("Spiel beendet") || period.includes("Ende")) {
-      gameStatus = "Beendet";
-    } else if (period.includes("Pause") || period.includes("Halbzeit")) {
-      gameStatus = "Pause";
-    } else if (period.includes("Vorbereitung") || period.includes("Anpfiff")) {
-      gameStatus = "Vorbereitung";
-    } else {
-      gameStatus = "Live";
-    }
-  } else {
-    gameStatus = scoreData.gameStatus;
-  }
-
-  // Status-spezifische CSS-Klassen
-  if (gameStatus === "Beendet") {
-    statusClass = "ended";
-  } else if (gameStatus === "Pause") {
-    statusClass = "paused";
-  } else if (gameStatus === "Vorbereitung") {
-    statusClass = "preparation";
-  } else {
-    statusClass = "";
-  }
-  
-  statusEl.textContent = gameStatus;
-  statusEl.className = "info-value status-value " + statusClass;
-}
-
-
-/* Letztes Ereignis aktualisieren */
-function updateLastEvent(scoreData) {
-  var eventEl = $("#lastEvent");
-  if (!eventEl) return;
-  
-  var lastEvent = scoreData.lastEvent || "";
-  var lastScorer = scoreData.lastScorer || "";
-  var period = scoreData.period || "";
-  var homeGoals = parseInt(scoreData.homeGoals) || 0;
-  var awayGoals = parseInt(scoreData.awayGoals) || 0;
-  
-  // Status-Event-Logik entfernt - Backend liefert das korrekte letzte Ereignis
-  
-  // Debug: Logge die Werte
-  console.log("Event Debug:", {
-    period: period,
-    lastEvent: lastEvent,
-    lastScorer: lastScorer,
-    stableEventText: stableEventText
-  });
-  
-  // Vereinfachte Logik: Zeige einfach das letzte Ereignis zum Zeitstempel
-  var newEventText = "";
-  
-  // Einfach das Backend lastEvent verwenden (enthält das letzte Ereignis zum Zeitstempel)
-  if (lastEvent && lastEvent !== "") {
-    newEventText = lastEvent;
-  }
-  // Fallback: "-"
-  else {
-    newEventText = "-";
-  }
-  
-  // Nur aktualisieren wenn sich der Text wirklich geändert hat
-  if (newEventText !== "" && newEventText !== stableEventText) {
-    console.log("Event aktualisiert:", newEventText);
-    stableEventText = newEventText;
-    eventEl.textContent = stableEventText;
-  }
-}
+/* Alte Update-Funktionen entfernt - werden durch Stabilitäts-Buffer ersetzt */
 
 /* Tor-Toast anzeigen */
 function showToast(text){
@@ -378,7 +574,7 @@ function showToast(text){
 function init(){
   refreshLogos().then(function(){ return refreshScore(); });
   setInterval(refreshLogos, 60000);  // Sponsoren alle 60 Sekunden aktualisieren
-  setInterval(refreshScore, 1000);   // jede Sekunde (wegen Spielzeit)
+  setInterval(refreshScore, 1000);   // alle 1 Sekunde für schnellere Updates
 }
 
 init();

@@ -1,10 +1,12 @@
 {
-  "homeTeam": "ASV Rurtal Hückelhoven",
-  "awayTeam": "HG Kaarst / Büttgen II",
-  "homeGoals": 12,
-  "awayGoals": 3,
+  "homeTeam": "VfL Lübeck-Schwartau",
+  "awayTeam": "TV 05/07 Hüttenberg",
+  "homeGoals": 24,
+  "awayGoals": 18,
   "period": "Halbzeit",
-  "lastScorer": "Anonym Anonym",
-  "lastEvent": "18:29 - Zwei Minuten Strafe (2-Minuten Strafe HG Kaarst / Büttgen II)",
-  "gameStatus": "Live"
+  "lastScorer": "Lukas Kingsley Emdorf",
+  "lastEvent": "36:43 - Tor durch Lukas Kingsley Emdorf (VfL Lübeck-Schwartau)",
+  "gameStatus": "Live",
+  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/e52c3518-4bc2-4b9a-bb3e-1f4f8098f696.png?d=100x",
+  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/da2dff88-b6cd-4aca-a699-0da09d266cc9.png?d=100x"
 }
