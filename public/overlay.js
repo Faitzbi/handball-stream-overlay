@@ -91,7 +91,10 @@ function refreshScore(){
       setIf($("#homeGoals"), s.homeGoals, 0);
       setIf($("#awayGoals"), s.awayGoals, 0);
       setIf($("#clock"), s.clock, "00:00");
-      setIf($("#period"), s.period, "");
+      
+      // Status und Ereignis aktualisieren
+      updateGameStatus(s);
+      updateLastEvent(s);
 
       return j("/api/config")
         .then(function(cfg){
