@@ -105,3 +105,6 @@ logs
 # Temporary files
 tmp/
 temp/
+
+# Debug dumps
+data/debug/
