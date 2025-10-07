@@ -23,7 +23,8 @@ function calculateSourceStamp(summary, events) {
   const summaryTime = summary?.updatedAt ? new Date(summary.updatedAt).getTime() : 0;
   const newestEventTime = events && events.length > 0 ? 
     Math.max(...events.map(e => new Date(e.timestamp || e.time || 0).getTime())) : 0;
-  return Math.max(summaryTime, newestEventTime, Date.now());
+  // Use content-based timestamp, not current time, to allow new games
+  return Math.max(summaryTime, newestEventTime);
 }
 
 // Deterministic newest event selection
@@ -1144,10 +1145,21 @@ async function fetchOnce() {
       const parsed = parseCombinedJSON(json, {});
       const currentScore = readJSON(SCORE_FILE, {});
       
-      // Calculate monotonic sourceStamp
-      const sourceStamp = calculateSourceStamp(json.data?.summary, json.data?.events);
-      const lastSourceStamp = currentScore.lastSourceStamp || 0;
-      const isStalePacket = sourceStamp <= lastSourceStamp;
+      // For live games, always allow updates regardless of sourceStamp
+      let isStalePacket = false;
+      let isGameSwitch = false;
+      
+      if (parsed.gameStatus === 'Live') {
+        // Skip sourceStamp check for live games - always allow updates
+        isGameSwitch = detectGameSwitch(parsed, currentScore);
+        isStalePacket = false;
+      } else {
+        // Calculate monotonic sourceStamp for non-live games
+        const sourceStamp = calculateSourceStamp(json.data?.summary, json.data?.events);
+        const lastSourceStamp = currentScore.lastSourceStamp || 0;
+        isGameSwitch = detectGameSwitch(parsed, currentScore);
+        isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+      }
       
       dbg('VERSIONING', {
         reqId,
@@ -1161,9 +1173,6 @@ async function fetchOnce() {
         dbg('STALE_PACKET', { reqId, sourceStamp, lastSourceStamp });
         return;
       }
-      
-      // Game switch detection
-      const isGameSwitch = detectGameSwitch(parsed, currentScore);
       
       dbg('GAME_SWITCH', {
         reqId,
@@ -1304,7 +1313,20 @@ async function fetchOnce() {
     // Calculate monotonic sourceStamp for HTML (content-based)
     const sourceStamp = calculateHtmlSourceStamp(parsed);
     const lastSourceStamp = currentScore.lastSourceStamp || 0;
-    const isStalePacket = sourceStamp <= lastSourceStamp;
+    
+    // For live games, always allow updates regardless of sourceStamp
+    let isStalePacket = false;
+    let isGameSwitch = false;
+    
+    if (parsed.gameStatus === 'Live') {
+      // Skip sourceStamp check for live games - always allow updates
+      isGameSwitch = detectGameSwitch(parsed, currentScore);
+      isStalePacket = false;
+    } else {
+      // Calculate monotonic sourceStamp for non-live games
+      isGameSwitch = detectGameSwitch(parsed, currentScore);
+      isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+    }
     
     dbg('VERSIONING_HTML', {
       reqId,
@@ -1318,9 +1340,6 @@ async function fetchOnce() {
       dbg('STALE_PACKET_HTML', { reqId, sourceStamp, lastSourceStamp });
       return;
     }
-    
-    // Game switch detection
-    const isGameSwitch = detectGameSwitch(parsed, currentScore);
     
     dbg('GAME_SWITCH_HTML', {
       reqId,
@@ -1336,11 +1355,13 @@ async function fetchOnce() {
     let finalEvent = currentScore.lastEvent || '';
     let finalScorer = currentScore.lastScorer || '';
     
-    if (parsed.lastEvent) {
+    // Always use the parsed lastEvent if it exists and is not empty
+    if (parsed.lastEvent && parsed.lastEvent.trim() !== '') {
       const newEventTime = extractGameTime(parsed.lastEvent);
       const currentEventTime = extractGameTime(currentScore.lastEvent || '');
       
-      if (newEventTime >= currentEventTime) {
+      // Allow updates for live games
+      if (parsed.gameStatus === 'Live' || newEventTime >= currentEventTime) {
         finalEvent = parsed.lastEvent;
         finalScorer = parsed.lastScorer || '';
       }
