@@ -1125,17 +1125,19 @@ async function fetchOnce() {
     if (isApiLike && ct.includes('application/json')) {
       const json = await res.json();
       
-      // Dump parsed result to debug file
-      try {
-        const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.json`);
-        fs.writeFileSync(debugFile, JSON.stringify(json, null, 2));
-        dbg('PARSED_DUMP', {
-          reqId,
-          file: debugFile,
-          preview: JSON.stringify(json).substring(0, 1500)
-        });
-      } catch (err) {
-        dbg('PARSED_DUMP_ERROR', { reqId, error: err.message });
+      // Dump parsed result to debug file (only when DEBUG)
+      if (DEBUG) {
+        try {
+          const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.json`);
+          fs.writeFileSync(debugFile, JSON.stringify(json, null, 2));
+          dbg('PARSED_DUMP', {
+            reqId,
+            file: debugFile,
+            preview: JSON.stringify(json).substring(0, 1500)
+          });
+        } catch (err) {
+          dbg('PARSED_DUMP_ERROR', { reqId, error: err.message });
+        }
       }
       
       // Parse JSON with new logic
@@ -1273,17 +1275,19 @@ async function fetchOnce() {
     console.log('[ticker] Using HTML parsing for:', tickerUrl);
     const html = await res.text();
     
-    // Dump HTML content to debug file
-    try {
-      const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.html`);
-      fs.writeFileSync(debugFile, html);
-      dbg('HTML_DUMP', {
-        reqId,
-        file: debugFile,
-        preview: html.substring(0, 1500)
-      });
-    } catch (err) {
-      dbg('HTML_DUMP_ERROR', { reqId, error: err.message });
+    // Dump HTML content to debug file (only when DEBUG)
+    if (DEBUG) {
+      try {
+        const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.html`);
+        fs.writeFileSync(debugFile, html);
+        dbg('HTML_DUMP', {
+          reqId,
+          file: debugFile,
+          preview: html.substring(0, 1500)
+        });
+      } catch (err) {
+        dbg('HTML_DUMP_ERROR', { reqId, error: err.message });
+      }
     }
     
     const parsed = await parseTickerHTML(html, tickerUrl);
