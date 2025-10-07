@@ -1,12 +1,13 @@
 {
-  "homeTeam": "VfL Lübeck-Schwartau",
-  "awayTeam": "TV 05/07 Hüttenberg",
-  "homeGoals": 24,
-  "awayGoals": 19,
-  "period": "Halbzeit",
-  "lastScorer": "Hendrik Schreiber",
-  "lastEvent": "36:53 - Tor durch Hendrik Schreiber (TV 05/07 Hüttenberg)",
-  "gameStatus": "Live",
-  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/e52c3518-4bc2-4b9a-bb3e-1f4f8098f696.png?d=100x",
-  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/da2dff88-b6cd-4aca-a699-0da09d266cc9.png?d=100x"
+  "homeTeam": "HSG Kastellaun/Simmern",
+  "awayTeam": "HV Vallendar",
+  "homeGoals": 33,
+  "awayGoals": 32,
+  "period": "Spiel beendet",
+  "lastScorer": "",
+  "lastEvent": "60:00 - Spiel beendet",
+  "gameStatus": "Beendet",
+  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/240ee99b-7992-41f5-a4e7-a52060141142.png?d=100x",
+  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/ec40f535-dbb4-4f85-a737-ffbb4de99706.jpeg?d=100x",
+  "lastSourceStamp": 1759851861825
 }

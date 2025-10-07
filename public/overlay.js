@@ -3,6 +3,17 @@ var lastScorerSeen = "";
 var playerDisplayTimeout = null;
 var stableEventText = "";
 
+// Debug helper function for client-side
+var DEBUG = window.location.search.includes('debug=1') || localStorage.getItem('DEBUG') === '1';
+var clientReqIdCounter = 0;
+
+function dbg(section, obj) {
+  if (!DEBUG) return;
+  var timestamp = new Date().toISOString();
+  var compactJson = JSON.stringify(obj, null, 0);
+  console.log('[DEBUG-CLIENT-' + section + '] ' + timestamp + ': ' + compactJson);
+}
+
 // Client-seitige Debouncing gegen Race Conditions
 var lastClientUpdate = 0;
 var CLIENT_UPDATE_INTERVAL = 500; // Mindestens 500ms zwischen Client-Updates
@@ -304,16 +315,43 @@ function setLogo(el, url){
 
 /* Score aktualisieren mit intelligenter Event-Erkennung */
 function refreshScore(){
+  // Generate unique request ID for this client poll
+  var reqId = ++clientReqIdCounter;
+  var startTime = Date.now();
+  
+  dbg('CLIENT_POLL_START', {
+    reqId: reqId,
+    startTime: new Date(startTime).toISOString()
+  });
+  
   // Client-seitige Debouncing gegen Race Conditions
   var now = Date.now();
   if (now - lastClientUpdate < CLIENT_UPDATE_INTERVAL) {
+    dbg('CLIENT_DEBOUNCE_SKIP', {
+      reqId: reqId,
+      reason: 'too soon',
+      timeSinceLastUpdate: now - lastClientUpdate,
+      interval: CLIENT_UPDATE_INTERVAL
+    });
     console.log('[client] Skipping update - too soon');
     return Promise.resolve();
   }
   lastClientUpdate = now;
   
+  var fetchStartTime = Date.now();
   return j("/api/score")
     .then(function(s){
+      var fetchEndTime = Date.now();
+      var fetchLatency = fetchEndTime - fetchStartTime;
+      
+      dbg('CLIENT_REQUEST_DETAILS', {
+        reqId: reqId,
+        fetchLatency: fetchLatency,
+        startTime: new Date(fetchStartTime).toISOString(),
+        endTime: new Date(fetchEndTime).toISOString(),
+        serverData: s
+      });
+      
       // Aktuelle DOM-Werte lesen
       var currentHomeTeam = $("#homeTeam").textContent || "";
       var currentAwayTeam = $("#awayTeam").textContent || "";
@@ -328,6 +366,48 @@ function refreshScore(){
       var newEvent = s.lastEvent || "";
       var newStatus = s.gameStatus || "";
       
+      // Client-side diff logging
+      var changes = {};
+      if (s.homeTeam !== currentHomeTeam) changes.homeTeam = { from: currentHomeTeam, to: s.homeTeam };
+      if (s.awayTeam !== currentAwayTeam) changes.awayTeam = { from: currentAwayTeam, to: s.awayTeam };
+      if (newHomeGoals !== currentHomeGoals) changes.homeGoals = { from: currentHomeGoals, to: newHomeGoals };
+      if (newAwayGoals !== currentAwayGoals) changes.awayGoals = { from: currentAwayGoals, to: newAwayGoals };
+      if (newEvent !== currentEvent) changes.lastEvent = { from: currentEvent, to: newEvent };
+      if (newStatus !== currentStatus) changes.gameStatus = { from: currentStatus, to: newStatus };
+      
+      dbg('CLIENT_DIFF_CHANGES', {
+        reqId: reqId,
+        changes: changes,
+        hasChanges: Object.keys(changes).length > 0
+      });
+      
+      // Client-side event logging
+      var lastEventId = newEvent ? newEvent.substring(0, 50) : '';
+      var lastEventTimestamp = extractEventTimestamp(newEvent);
+      var currentEventTimestamp = extractEventTimestamp(currentEvent);
+      
+      dbg('CLIENT_EVENT_LOGS', {
+        reqId: reqId,
+        lastEventId: lastEventId,
+        lastEventTimestamp: lastEventTimestamp,
+        currentEventTimestamp: currentEventTimestamp,
+        isNewerEvent: lastEventTimestamp && currentEventTimestamp ? lastEventTimestamp > currentEventTimestamp : true,
+        eventText: newEvent ? newEvent.substring(0, 100) : ''
+      });
+      
+      // Client-side cooldown/debounce logs
+      var cooldownUntil = s.cooldownUntil || 0;
+      var htmlStableCount = s.htmlStableCount || 0;
+      var eventKey = newEvent ? newEvent.substring(0, 50) : '';
+      
+      dbg('CLIENT_COOLDOWN_DEBOUNCE', {
+        reqId: reqId,
+        cooldownUntil: cooldownUntil,
+        htmlStableCount: htmlStableCount,
+        eventKey: eventKey,
+        isInCooldown: Date.now() < cooldownUntil
+      });
+      
       // INTELLIGENTE EVENT-ERKENNUNG: Sofortige Updates basierend auf Timestamps
       
       // Prüfe ob es ein Spielwechsel ist
@@ -336,15 +416,71 @@ function refreshScore(){
         awayTeam: currentAwayTeam
       });
       
-    // EINFACHE LÖSUNG: Nur akzeptieren wenn Event wirklich anders ist
-    var shouldUpdateEvent = newEvent && newEvent.trim() !== "" && 
-      (isGameSwitch || newEvent !== currentEvent);
+      dbg('CLIENT_GAME_SWITCH', {
+        reqId: reqId,
+        isGameSwitch: isGameSwitch,
+        newTeams: (s.homeTeam || '') + ' vs ' + (s.awayTeam || ''),
+        currentTeams: currentHomeTeam + ' vs ' + currentAwayTeam
+      });
+      
+    // Event-Monotonie erzwingen: Nur akzeptieren, wenn neuer Zeitstempel > aktueller
+    var newEventTs = extractEventTimestamp(newEvent);
+    var currentEventTs = extractEventTimestamp(currentEvent);
+    var isEventRegression = (newEventTs !== null && currentEventTs !== null) && newEventTs < currentEventTs;
+    var isEventEqualTime = (newEventTs !== null && currentEventTs !== null) && newEventTs === currentEventTs;
+    
+    if (isEventRegression && !isGameSwitch) {
+      dbg('CLIENT_EVENT_REGRESSION_BLOCKED', {
+        reqId: reqId,
+        newEvent: newEvent,
+        currentEvent: currentEvent,
+        newEventTimestamp: newEventTs,
+        currentEventTimestamp: currentEventTs,
+        reason: 'new event older than current'
+      });
+    }
+    
+    // Bei gleicher Zeit bevorzugen wir den bereits angezeigten Text (kein Toggle)
+    var allowEqualTimeReplace = false; // konservativ: nicht ersetzen bei gleicher Zeit
+    
+    var shouldUpdateEvent = newEvent && newEvent.trim() !== "" &&
+      (isGameSwitch || (
+        // Nur wenn neuer Zeitstempel größer ist, oder keine Zeitinformationen vorliegen
+        (!isEventRegression && !isEventEqualTime) ||
+        (newEventTs === null || currentEventTs === null && newEvent !== currentEvent)
+      ));
+      
+      // Score regression protection on client side
+      var newTotal = newHomeGoals + newAwayGoals;
+      var currentTotal = currentHomeGoals + currentAwayGoals;
+      var isScoreRegression = newTotal < currentTotal && !isGameSwitch;
+      
+      if (isScoreRegression) {
+        dbg('CLIENT_SCORE_REGRESSION_BLOCKED', {
+          reqId: reqId,
+          newTotal: newTotal,
+          currentTotal: currentTotal,
+          newScore: { homeGoals: newHomeGoals, awayGoals: newAwayGoals },
+          currentScore: { homeGoals: currentHomeGoals, awayGoals: currentAwayGoals },
+          reason: 'total score decreased'
+        });
+        // Keep current scores, don't update
+        newHomeGoals = currentHomeGoals;
+        newAwayGoals = currentAwayGoals;
+      }
       
       // AGGRESSIVE Score Updates: Immer updaten wenn sich der Score geändert hat
       var newScoreData = { homeGoals: newHomeGoals, awayGoals: newAwayGoals };
       var currentScoreData = { homeGoals: currentHomeGoals, awayGoals: currentAwayGoals };
       var shouldUpdateScore = isGameSwitch || 
         (newHomeGoals !== currentHomeGoals || newAwayGoals !== currentAwayGoals);
+        
+      dbg('CLIENT_UPDATE_DECISIONS', {
+        reqId: reqId,
+        shouldUpdateEvent: shouldUpdateEvent,
+        shouldUpdateScore: shouldUpdateScore,
+        isGameSwitch: isGameSwitch
+      });
       
       // Datenstabilitätsprüfung: Verhindere Updates wenn Daten identisch sind
       var isDataIdentical = (
@@ -456,8 +592,27 @@ function refreshScore(){
       setLogo($("#awayLogo"), (s && s.awayLogoUrl) ? s.awayLogoUrl : "");
 
       // Tor-Animation-Logik entfernt - wird jetzt durch Stabilitätsprüfung kontrolliert
+      
+      var endTime = Date.now();
+      var totalLatency = endTime - startTime;
+      
+      dbg('CLIENT_POLL_END', {
+        reqId: reqId,
+        totalLatency: totalLatency,
+        endTime: new Date(endTime).toISOString()
+      });
     })
     .catch(function(err){
+      var endTime = Date.now();
+      var totalLatency = endTime - startTime;
+      
+      dbg('CLIENT_POLL_ERROR', {
+        reqId: reqId,
+        error: err.message,
+        totalLatency: totalLatency,
+        endTime: new Date(endTime).toISOString()
+      });
+      
       console.error("Score fetch error:", err);
     });
 }

@@ -6,6 +6,121 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const cheerio = require('cheerio');
 
+// Debug helper function
+const DEBUG = process.env.DEBUG === '1';
+let reqIdCounter = 0;
+let fetchLock = false; // Prevent overlapping fetches
+
+function dbg(section, obj) {
+  if (!DEBUG) return;
+  const timestamp = new Date().toISOString();
+  const compactJson = JSON.stringify(obj, null, 0);
+  console.log(`[DEBUG-${section}] ${timestamp}: ${compactJson}`);
+}
+
+// Monotonic sourceStamp calculation
+function calculateSourceStamp(summary, events) {
+  const summaryTime = summary?.updatedAt ? new Date(summary.updatedAt).getTime() : 0;
+  const newestEventTime = events && events.length > 0 ? 
+    Math.max(...events.map(e => new Date(e.timestamp || e.time || 0).getTime())) : 0;
+  return Math.max(summaryTime, newestEventTime, Date.now());
+}
+
+// Deterministic newest event selection
+function selectNewestEvent(events) {
+  if (!events || events.length === 0) return null;
+  
+  // Sort events deterministically: timestamp desc → id desc → gameTime desc
+  const sortedEvents = events.sort((a, b) => {
+    // Primary: timestamp descending
+    const timeA = new Date(a.timestamp || a.time || 0).getTime();
+    const timeB = new Date(b.timestamp || b.time || 0).getTime();
+    if (timeA !== timeB) return timeB - timeA;
+    
+    // Tiebreaker: id descending
+    const idA = a.id || a.eventId || '';
+    const idB = b.id || b.eventId || '';
+    if (idA !== idB) return idB.localeCompare(idA);
+    
+    // Final tiebreaker: gameTime descending (mm:ss)
+    const gameTimeA = extractGameTime(a.gameTime || a.time || '');
+    const gameTimeB = extractGameTime(b.gameTime || b.time || '');
+    return gameTimeB - gameTimeA;
+  });
+  
+  return sortedEvents[0];
+}
+
+// Extract game time in seconds from mm:ss format
+function extractGameTime(timeStr) {
+  if (!timeStr) return 0;
+  const match = timeStr.match(/(\d{1,2}):(\d{2})/);
+  if (match) {
+    const minutes = parseInt(match[1], 10);
+    const seconds = parseInt(match[2], 10);
+    return minutes * 60 + seconds;
+  }
+  return 0;
+}
+
+// Score regression protection
+function protectScoreRegression(newScore, currentScore, isGameSwitch) {
+  if (isGameSwitch) return newScore; // Allow reset on game switch
+  
+  const newTotal = (newScore.homeGoals || 0) + (newScore.awayGoals || 0);
+  const currentTotal = (currentScore.homeGoals || 0) + (currentScore.awayGoals || 0);
+  
+  // Block regression unless it's a clear game switch
+  if (newTotal < currentTotal) {
+    dbg('SCORE_REGRESSION_BLOCKED', {
+      newTotal,
+      currentTotal,
+      newScore,
+      currentScore,
+      reason: 'total score decreased'
+    });
+    return currentScore; // Keep current score
+  }
+  
+  // Use MAX for individual team scores to prevent temporary dips
+  return {
+    homeGoals: Math.max(newScore.homeGoals || 0, currentScore.homeGoals || 0),
+    awayGoals: Math.max(newScore.awayGoals || 0, currentScore.awayGoals || 0)
+  };
+}
+
+// Game switch detection
+function detectGameSwitch(newData, currentData) {
+  const newTeams = `${newData.homeTeam || ''} vs ${newData.awayTeam || ''}`;
+  const currentTeams = `${currentData.homeTeam || ''} vs ${currentData.awayTeam || ''}`;
+  
+  // Team names changed
+  const teamChanged = newTeams !== currentTeams && 
+    newTeams !== ' vs ' && currentTeams !== ' vs ' &&
+    newData.homeTeam && newData.awayTeam;
+  
+  // Clear reset: previous > 0 goals, now ≤ 2 and smaller
+  const newTotal = (newData.homeGoals || 0) + (newData.awayGoals || 0);
+  const currentTotal = (currentData.homeGoals || 0) + (currentData.awayGoals || 0);
+  const clearReset = currentTotal > 0 && newTotal <= 2 && newTotal < currentTotal;
+  
+  return teamChanged || clearReset;
+}
+
+// Deep diff for atomic writes
+function hasRealChanges(newData, currentData) {
+  const fields = ['homeTeam', 'awayTeam', 'homeGoals', 'awayGoals', 'period', 'lastScorer', 'lastEvent', 'gameStatus', 'homeLogoUrl', 'awayLogoUrl'];
+  return fields.some(field => newData[field] !== currentData[field]);
+}
+
+// Calculate a content-based source stamp for HTML path
+function calculateHtmlSourceStamp(parsed) {
+  const eventSeconds = extractGameTime(parsed && parsed.lastEvent ? parsed.lastEvent : '');
+  const totalGoals = (parsed && Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : 0) + (parsed && Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : 0);
+  // Scale event time to dominate over totalGoals; ensures monotonic ordering across time, with score as tiebreaker
+  return (eventSeconds * 1000) + totalGoals;
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -15,6 +130,7 @@ const ASSETS_DIR = path.join(DIR, 'assets');
 const LOGO_DIR = path.join(ASSETS_DIR, 'logos');
 const TEAM_DIR = path.join(ASSETS_DIR, 'teams');
 const DATA_DIR = path.join(DIR, 'data');
+const DEBUG_DIR = path.join(DATA_DIR, 'debug');
 const SCORE_FILE = path.join(DATA_DIR, 'score.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
@@ -23,7 +139,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use('/public', express.static(PUBLIC_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
 
-for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, TEAM_DIR, DATA_DIR]) {
+for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, TEAM_DIR, DATA_DIR, DEBUG_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({
@@ -920,12 +1036,33 @@ async function parseTickerHTML(html, baseUrl) {
 
 // Eine Sekunde Polling – erkennt JSON automatisch
 async function fetchOnce() {
-  // Schreibsperre gegen Race Conditions
-  // Write-Lock entfernt - verhindert Caching
+  // Fetch lock to prevent overlapping requests
+  if (fetchLock) {
+    dbg('FETCH_SKIP', { reason: 'fetch already in progress' });
+    return;
+  }
   
-  const config = readJSON(CONFIG_FILE, {});
-  const { tickerUrl } = config;
-  if (!tickerUrl) return;
+  fetchLock = true;
+  
+  // Generate unique request ID for this poll
+  const reqId = ++reqIdCounter;
+  const startTime = Date.now();
+  
+  try {
+    
+    const config = readJSON(CONFIG_FILE, {});
+    const { tickerUrl } = config;
+    
+    dbg('POLL_START', {
+      reqId,
+      startTime: new Date(startTime).toISOString(),
+      tickerUrl: tickerUrl || 'none'
+    });
+    
+    if (!tickerUrl) {
+      dbg('POLL_SKIP', { reqId, reason: 'no tickerUrl' });
+      return;
+    }
 
   // Header vorbereiten für handball.net
   const headers = {
@@ -943,202 +1080,344 @@ async function fetchOnce() {
     'Referer': 'https://www.handball.net/'
   };
 
-  try {
     // Cache-Busting: Add timestamp to prevent caching
     const cacheBuster = `?_=${Date.now()}`;
     const urlWithCacheBuster = tickerUrl.includes('?') ? `${tickerUrl}&_=${Date.now()}` : `${tickerUrl}${cacheBuster}`;
     
+    const fetchStartTime = Date.now();
     const res = await fetch(urlWithCacheBuster, { 
       headers,
       cache: 'no-store' // Disable caching
     });
+    const fetchEndTime = Date.now();
+    const fetchLatency = fetchEndTime - fetchStartTime;
+    
     const ct = (res.headers.get('content-type') || '').toLowerCase();
     const isApiLike = /\/api\//.test(tickerUrl) || /combined/.test(tickerUrl);
+    const pathType = isApiLike ? 'JSON' : 'HTML';
+    
+    dbg('REQUEST_DETAILS', {
+      reqId,
+      path: pathType,
+      url: tickerUrl,
+      isApiLike,
+      contentType: ct,
+      latency: fetchLatency,
+      startTime: new Date(fetchStartTime).toISOString(),
+      endTime: new Date(fetchEndTime).toISOString(),
+      status: res.status,
+      statusText: res.statusText
+    });
+
+    // Single-source guarantee: if URL looks API-like but content-type != application/json -> skip
+    if (isApiLike && !ct.includes('application/json')) {
+      dbg('SINGLE_SOURCE_SKIP', {
+        reqId,
+        reason: 'API-like URL but non-JSON content-type',
+        url: tickerUrl,
+        contentType: ct,
+        isApiLike
+      });
+      return;
+    }
 
     // ***** JSON-API versuchen (falls verfügbar) *****
     if (isApiLike && ct.includes('application/json')) {
       const json = await res.json();
-      // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
+      
+      // Dump parsed result to debug file
+      try {
+        const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.json`);
+        fs.writeFileSync(debugFile, JSON.stringify(json, null, 2));
+        dbg('PARSED_DUMP', {
+          reqId,
+          file: debugFile,
+          preview: JSON.stringify(json).substring(0, 1500)
+        });
+      } catch (err) {
+        dbg('PARSED_DUMP_ERROR', { reqId, error: err.message });
+      }
+      
+      // Parse JSON with new logic
       const parsed = parseCombinedJSON(json, {});
-
-      // Logos automatisch übernehmen
-      const config = readJSON(CONFIG_FILE, {});
-      if (parsed.homeLogoUrl) config.homeLogoUrl = parsed.homeLogoUrl;
-      if (parsed.awayLogoUrl) config.awayLogoUrl = parsed.awayLogoUrl;
-      writeJSON(CONFIG_FILE, config);
-
-      // Plausibilitätsbremse gegen „38:0"-Quatsch
-      if (parsed.homeGoals > 80 || parsed.awayGoals > 80) {
-        console.warn('[ticker] Ignoring implausible score:', parsed.homeGoals, parsed.awayGoals);
+      const currentScore = readJSON(SCORE_FILE, {});
+      
+      // Calculate monotonic sourceStamp
+      const sourceStamp = calculateSourceStamp(json.data?.summary, json.data?.events);
+      const lastSourceStamp = currentScore.lastSourceStamp || 0;
+      const isStalePacket = sourceStamp <= lastSourceStamp;
+      
+      dbg('VERSIONING', {
+        reqId,
+        sourceStamp,
+        lastSourceStamp,
+        isStalePacket,
+        decision: isStalePacket ? 'ignore' : 'accept'
+      });
+      
+      if (isStalePacket) {
+        dbg('STALE_PACKET', { reqId, sourceStamp, lastSourceStamp });
         return;
       }
       
-      // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
-      console.log('[ticker] Writing JSON data:', {
-        homeTeam: parsed.homeTeam,
-        awayTeam: parsed.awayTeam,
-        homeGoals: parsed.homeGoals,
-        awayGoals: parsed.awayGoals,
-        lastEvent: parsed.lastEvent
-      });
+      // Game switch detection
+      const isGameSwitch = detectGameSwitch(parsed, currentScore);
       
-      writeJSON(SCORE_FILE, {
-        homeTeam: parsed.homeTeam,
-        awayTeam: parsed.awayTeam,
-        homeGoals: parsed.homeGoals,
-        awayGoals: parsed.awayGoals,
-        period: parsed.period,
-        lastScorer: parsed.lastScorer,
-        lastEvent: parsed.lastEvent,
-        gameStatus: parsed.gameStatus,
-        homeLogoUrl: parsed.homeLogoUrl || '',
-        awayLogoUrl: parsed.awayLogoUrl || ''
-      });
-      
-      console.log('[ticker]', `${parsed.homeTeam} ${parsed.homeGoals}:${parsed.awayGoals} ${parsed.awayTeam} | ${parsed.period}`);
-      return;
-      
-      console.log('[DEBUG-PENDULUM] JSON Detection:', {
-        isGameSwitch: isGameSwitch,
-        shouldUpdateEvent: shouldUpdateEvent,
-        shouldUpdateScore: shouldUpdateScore,
-        newEvent: newEventData,
-        currentEvent: currentEventData,
-        newScore: newScoreData,
-        currentScore: currentScoreData,
-        newTimestamp: extractEventTimestamp(newEventData),
-        currentTimestamp: extractEventTimestamp(currentEventData),
+      dbg('GAME_SWITCH', {
+        reqId,
+        isGameSwitch,
         newTeams: `${parsed.homeTeam} vs ${parsed.awayTeam}`,
-        currentTeams: `${cur.homeTeam} vs ${cur.awayTeam}`,
-        eventComparison: {
-          newEventLength: newEventData ? newEventData.length : 0,
-          currentEventLength: currentEventData ? currentEventData.length : 0,
-          areEqual: newEventData === currentEventData,
-          newEventTrimmed: newEventData ? newEventData.trim() : '',
-          currentEventTrimmed: currentEventData ? currentEventData.trim() : ''
-        }
+        currentTeams: `${currentScore.homeTeam} vs ${currentScore.awayTeam}`
       });
       
-      // Intelligente Daten-Merging: Sofortige Updates ohne Verzögerung
-      const next = {
-        homeTeam: parsed.homeTeam || cur.homeTeam || 'Heim',
-        awayTeam: parsed.awayTeam || cur.awayTeam || 'Gast',
-        homeGoals: shouldUpdateScore ? (Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0)) : (cur.homeGoals|0),
-        awayGoals: shouldUpdateScore ? (Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0)) : (cur.awayGoals|0),
-        clock: parsed.clock || cur.clock || '00:00',
-        period: parsed.period || cur.period || '',
-        lastScorer: parsed.lastScorer || cur.lastScorer || '',
-        // Intelligente lastEvent: Nur bei neueren Events
-        lastEvent: shouldUpdateEvent ? newEventData.trim() : (cur.lastEvent || ''),
-        // Stabile gameStatus: Nur aktualisieren wenn sich der Status geändert hat
-        gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus && parsed.gameStatus.trim() !== '') ? parsed.gameStatus : (cur.gameStatus || 'Live')
+      // Score regression protection
+      const protectedScore = protectScoreRegression(parsed, currentScore, isGameSwitch);
+      
+      // Event selection: get newest event deterministically
+      const events = json.data?.events || [];
+      const newestEvent = selectNewestEvent(events);
+      
+      dbg('EVENT_SELECTION', {
+        reqId,
+        totalEvents: events.length,
+        newestEvent: newestEvent ? {
+          id: newestEvent.id || newestEvent.eventId,
+          timestamp: newestEvent.timestamp || newestEvent.time,
+          gameTime: newestEvent.gameTime || newestEvent.time,
+          type: newestEvent.type || newestEvent.eventType
+        } : null
+      });
+      
+      // Event monotonicity: only update if newer
+      let finalEvent = currentScore.lastEvent || '';
+      let finalScorer = currentScore.lastScorer || '';
+      
+      if (newestEvent) {
+        const newEventTime = extractGameTime(newestEvent.gameTime || newestEvent.time || '');
+        const currentEventTime = extractGameTime(currentScore.lastEvent || '');
+        
+        if (newEventTime >= currentEventTime) {
+          // Build event string from newest event
+          const eventTime = newestEvent.gameTime || newestEvent.time || '';
+          const eventType = newestEvent.type || newestEvent.eventType || '';
+          const playerName = newestEvent.playerName || newestEvent.player || '';
+          const teamName = newestEvent.teamName || newestEvent.team || '';
+          
+          if (eventType === 'goal' || eventType === 'tor') {
+            finalEvent = `${eventTime} - Tor durch ${playerName} (${teamName})`;
+            finalScorer = playerName;
+          } else if (eventType === 'timeout') {
+            finalEvent = `${eventTime} - Timeout für ${teamName}`;
+          } else if (eventType === 'penalty' || eventType === '2min') {
+            finalEvent = `${eventTime} - 2 Minuten für ${playerName} (${teamName})`;
+          } else {
+            finalEvent = `${eventTime} - ${eventType}`;
+          }
+        }
+      }
+      
+      // Build final data
+      const newScoreData = {
+        homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
+        awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
+        homeGoals: protectedScore.homeGoals,
+        awayGoals: protectedScore.awayGoals,
+        period: parsed.period || currentScore.period || '',
+        lastScorer: finalScorer,
+        lastEvent: finalEvent,
+        gameStatus: parsed.gameStatus || currentScore.gameStatus || 'Live',
+        homeLogoUrl: parsed.homeLogoUrl || currentScore.homeLogoUrl || '',
+        awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
+        lastSourceStamp: sourceStamp
       };
       
-      // Keine alten Stabilitätsprüfungen mehr - intelligente Erkennung reicht
+      // Deep diff check
+      if (!hasRealChanges(newScoreData, currentScore)) {
+        dbg('NO_CHANGES', { reqId, reason: 'no real changes detected' });
+        return;
+      }
       
-      // Schreibsperre aktivieren
-      writeJSON(SCORE_FILE, next);
-      console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
+      // Update config with logos
+      const configData = readJSON(CONFIG_FILE, {});
+      if (parsed.homeLogoUrl) configData.homeLogoUrl = parsed.homeLogoUrl;
+      if (parsed.awayLogoUrl) configData.awayLogoUrl = parsed.awayLogoUrl;
+      writeJSON(CONFIG_FILE, configData);
+      
+      // Plausibility check
+      if (newScoreData.homeGoals > 80 || newScoreData.awayGoals > 80) {
+        dbg('IMPLAUSIBLE_SCORE', {
+          reqId,
+          homeGoals: newScoreData.homeGoals,
+          awayGoals: newScoreData.awayGoals,
+          action: 'ignored'
+        });
+        console.warn('[ticker] Ignoring implausible score:', newScoreData.homeGoals, newScoreData.awayGoals);
+        return;
+      }
+      
+      // Atomic write
+      writeJSON(SCORE_FILE, newScoreData);
+      
+      dbg('WRITE_DECISION', {
+        reqId,
+        action: 'accepted',
+        data: newScoreData,
+        changes: Object.keys(newScoreData).filter(key => newScoreData[key] !== currentScore[key])
+      });
+      
+      console.log('[ticker]', `${newScoreData.homeTeam} ${newScoreData.homeGoals}:${newScoreData.awayGoals} ${newScoreData.awayTeam} | ${newScoreData.period}`);
       return;
     }
 
     // ***** HTML-Parsing als Fallback *****
     console.log('[ticker] Using HTML parsing for:', tickerUrl);
     const html = await res.text();
+    
+    // Dump HTML content to debug file
+    try {
+      const debugFile = path.join(DEBUG_DIR, `parsed-${reqId}.html`);
+      fs.writeFileSync(debugFile, html);
+      dbg('HTML_DUMP', {
+        reqId,
+        file: debugFile,
+        preview: html.substring(0, 1500)
+      });
+    } catch (err) {
+      dbg('HTML_DUMP_ERROR', { reqId, error: err.message });
+    }
+    
     const parsed = await parseTickerHTML(html, tickerUrl);
     
     // WICHTIG: Wenn Parser null zurückgibt (keine Events), behalte die aktuellen Daten
     if (parsed === null) {
+      dbg('PARSER_NULL', { reqId, action: 'keeping current data' });
       console.log('[ticker] Parser returned null, keeping current data');
       return; // Don't update, keep current data
     }
     
-    // Logos automatisch übernehmen
-    const config = readJSON(CONFIG_FILE, {});
-    if (parsed.homeLogoUrl) config.homeLogoUrl = parsed.homeLogoUrl;
-    if (parsed.awayLogoUrl) config.awayLogoUrl = parsed.awayLogoUrl;
-    writeJSON(CONFIG_FILE, config);
+    const currentScore = readJSON(SCORE_FILE, {});
     
-    // EINFACHE LÖSUNG: Immer schreiben ohne komplexe Vergleiche
+    // Calculate monotonic sourceStamp for HTML (content-based)
+    const sourceStamp = calculateHtmlSourceStamp(parsed);
+    const lastSourceStamp = currentScore.lastSourceStamp || 0;
+    const isStalePacket = sourceStamp <= lastSourceStamp;
     
-    writeJSON(SCORE_FILE, {
-      homeTeam: parsed.homeTeam,
-      awayTeam: parsed.awayTeam,
-      homeGoals: parsed.homeGoals,
-      awayGoals: parsed.awayGoals,
-      period: parsed.period,
-      lastScorer: parsed.lastScorer,
-      lastEvent: parsed.lastEvent,
-      gameStatus: parsed.gameStatus,
-      homeLogoUrl: parsed.homeLogoUrl || '',
-      awayLogoUrl: parsed.awayLogoUrl || ''
+    dbg('VERSIONING_HTML', {
+      reqId,
+      sourceStamp,
+      lastSourceStamp,
+      isStalePacket,
+      decision: isStalePacket ? 'ignore' : 'accept'
     });
     
-    console.log('[ticker]', `${parsed.homeTeam} ${parsed.homeGoals}:${parsed.awayGoals} ${parsed.awayTeam} | ${parsed.period}`);
-    return;
-    
-    console.log('[DEBUG-PENDULUM] HTML Detection:', {
-      isGameSwitch: isGameSwitch,
-      shouldUpdateEvent: shouldUpdateEvent,
-      shouldUpdateScore: shouldUpdateScore,
-      newEvent: newEventData,
-      currentEvent: currentEventData,
-      newScore: newScoreData,
-      currentScore: currentScoreData,
-      newTimestamp: extractEventTimestamp(newEventData),
-      currentTimestamp: extractEventTimestamp(currentEventData),
-      newTeams: `${parsed.homeTeam} vs ${parsed.awayTeam}`,
-      currentTeams: `${cur.homeTeam} vs ${cur.awayTeam}`,
-      eventComparison: {
-        newEventLength: newEventData ? newEventData.length : 0,
-        currentEventLength: currentEventData ? currentEventData.length : 0,
-        areEqual: newEventData === currentEventData,
-        newEventTrimmed: newEventData ? newEventData.trim() : '',
-        currentEventTrimmed: currentEventData ? currentEventData.trim() : ''
-      }
-    });
-    
-    // Intelligente Daten-Merging: Sofortige Updates ohne Verzögerung
-    const next = {
-      homeTeam: parsed.homeTeam || cur.homeTeam || 'Heim',
-      awayTeam: parsed.awayTeam || cur.awayTeam || 'Gast',
-      homeGoals: shouldUpdateScore ? (Number.isFinite(parsed.homeGoals) ? parsed.homeGoals : (cur.homeGoals|0)) : (cur.homeGoals|0),
-      awayGoals: shouldUpdateScore ? (Number.isFinite(parsed.awayGoals) ? parsed.awayGoals : (cur.awayGoals|0)) : (cur.awayGoals|0),
-      // clock entfernt - Zeit ist bereits in lastEvent enthalten
-      period: parsed.period || cur.period || '',
-      lastScorer: parsed.lastScorer || cur.lastScorer || '',
-      // Intelligente lastEvent: Nur bei neueren Events
-      lastEvent: shouldUpdateEvent ? newEventData.trim() : (cur.lastEvent || ''),
-      // Stabile gameStatus: Nur aktualisieren wenn sich der Status geändert hat
-      gameStatus: (parsed.gameStatus && parsed.gameStatus !== cur.gameStatus && parsed.gameStatus.trim() !== '') ? parsed.gameStatus : (cur.gameStatus || 'Live')
-    };
-    
-    // Keine alten Stabilitätsprüfungen mehr - intelligente Erkennung reicht
-    
-    console.log('[DEBUG-PENDULUM] Writing to score.json:', {
-      lastEvent: next.lastEvent,
-      lastScorer: next.lastScorer,
-      gameStatus: next.gameStatus,
-      homeGoals: next.homeGoals,
-      awayGoals: next.awayGoals,
-      timestamp: new Date().toISOString(),
-      shouldUpdateEvent: shouldUpdateEvent,
-      shouldUpdateScore: shouldUpdateScore
-    });
-
-    // Bremse
-    if (next.homeGoals > 80 || next.awayGoals > 80) {
-      console.warn('[ticker] Ignoring implausible score (HTML path):', next.homeGoals, next.awayGoals);
+    if (isStalePacket) {
+      dbg('STALE_PACKET_HTML', { reqId, sourceStamp, lastSourceStamp });
       return;
     }
-
-    // Schreibsperre aktivieren
-    writeJSON(SCORE_FILE, next);
-    // Clock entfernt - Zeit wird aus lastEvent extrahiert
-    console.log(`[ticker] ${next.homeTeam} ${next.homeGoals}:${next.awayGoals} ${next.awayTeam} | ${next.period}`);
+    
+    // Game switch detection
+    const isGameSwitch = detectGameSwitch(parsed, currentScore);
+    
+    dbg('GAME_SWITCH_HTML', {
+      reqId,
+      isGameSwitch,
+      newTeams: `${parsed.homeTeam} vs ${parsed.awayTeam}`,
+      currentTeams: `${currentScore.homeTeam} vs ${currentScore.awayTeam}`
+    });
+    
+    // Score regression protection
+    const protectedScore = protectScoreRegression(parsed, currentScore, isGameSwitch);
+    
+    // Event monotonicity for HTML
+    let finalEvent = currentScore.lastEvent || '';
+    let finalScorer = currentScore.lastScorer || '';
+    
+    if (parsed.lastEvent) {
+      const newEventTime = extractGameTime(parsed.lastEvent);
+      const currentEventTime = extractGameTime(currentScore.lastEvent || '');
+      
+      if (newEventTime >= currentEventTime) {
+        finalEvent = parsed.lastEvent;
+        finalScorer = parsed.lastScorer || '';
+      }
+    }
+    
+    // Build final data
+    const newScoreData = {
+      homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
+      awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
+      homeGoals: protectedScore.homeGoals,
+      awayGoals: protectedScore.awayGoals,
+      period: parsed.period || currentScore.period || '',
+      lastScorer: finalScorer,
+      lastEvent: finalEvent,
+      gameStatus: parsed.gameStatus || currentScore.gameStatus || 'Live',
+      homeLogoUrl: parsed.homeLogoUrl || currentScore.homeLogoUrl || '',
+      awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
+      lastSourceStamp: sourceStamp
+    };
+    
+    // Deep diff check
+    if (!hasRealChanges(newScoreData, currentScore)) {
+      dbg('NO_CHANGES_HTML', { reqId, reason: 'no real changes detected' });
+      return;
+    }
+    
+    // Update config with logos
+    const configData = readJSON(CONFIG_FILE, {});
+    if (parsed.homeLogoUrl) configData.homeLogoUrl = parsed.homeLogoUrl;
+    if (parsed.awayLogoUrl) configData.awayLogoUrl = parsed.awayLogoUrl;
+    writeJSON(CONFIG_FILE, configData);
+    
+    // Plausibility check
+    if (newScoreData.homeGoals > 80 || newScoreData.awayGoals > 80) {
+      dbg('IMPLAUSIBLE_SCORE_HTML', {
+        reqId,
+        homeGoals: newScoreData.homeGoals,
+        awayGoals: newScoreData.awayGoals,
+        action: 'ignored'
+      });
+      console.warn('[ticker] Ignoring implausible score (HTML path):', newScoreData.homeGoals, newScoreData.awayGoals);
+      return;
+    }
+    
+    // Atomic write
+    writeJSON(SCORE_FILE, newScoreData);
+    
+    dbg('WRITE_DECISION_HTML', {
+      reqId,
+      action: 'accepted',
+      data: newScoreData,
+      changes: Object.keys(newScoreData).filter(key => newScoreData[key] !== currentScore[key])
+    });
+    
+    console.log('[ticker]', `${newScoreData.homeTeam} ${newScoreData.homeGoals}:${newScoreData.awayGoals} ${newScoreData.awayTeam} | ${newScoreData.period}`);
+    return;
 
   } catch (e) {
+    const endTime = Date.now();
+    const totalLatency = endTime - startTime;
+    
+    dbg('POLL_ERROR', {
+      reqId,
+      error: e.message,
+      totalLatency,
+      endTime: new Date(endTime).toISOString()
+    });
+    
     console.error('[ticker error]', e.message);
+  } finally {
+    const endTime = Date.now();
+    const totalLatency = endTime - startTime;
+    
+    dbg('POLL_END', {
+      reqId,
+      totalLatency,
+      endTime: new Date(endTime).toISOString()
+    });
+    
+    // Release fetch lock
+    fetchLock = false;
   }
 }
 
@@ -1146,7 +1425,7 @@ function startFetcher() {
   if (fetchTimer) clearInterval(fetchTimer);
   const config = readJSON(CONFIG_FILE, {});
   if (config.tickerUrl) {
-    fetchTimer = setInterval(fetchOnce, 750); // alle 750ms für schnellere Updates
+    fetchTimer = setInterval(fetchOnce, 1000); // alle 1000ms (1 Sekunde) für genau 1 Anfrage pro Sekunde
     console.log('[ticker] running:', config.tickerUrl);
   } else {
     console.log('[ticker] idle (no URL)');
