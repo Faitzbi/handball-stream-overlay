@@ -243,18 +243,46 @@ var sponsorUrls = [];
 var currentSponsorIndex = 0;
 var sponsorRotationInterval = null;
 
-function initSponsorRotation(urls) {
-  sponsorUrls = (urls && urls.length) ? urls : ["/public/placeholder.svg"];
-  currentSponsorIndex = 0;
-  
-  // Ersten Sponsor anzeigen
-  showCurrentSponsor();
-  
-  // Rotation starten (alle 20 Sekunden)
-  if (sponsorRotationInterval) {
-    clearInterval(sponsorRotationInterval);
+// Aktualisiert die Liste der Sponsor-Logos, ohne die Rotation oder den Index zurückzusetzen
+function updateSponsorRotation(urls) {
+  var newUrls = (urls && urls.length) ? urls.slice() : ["/public/placeholder.svg"];
+
+  // Wenn es noch keinen Intervall gibt, initialisieren wir später nach dem ersten Render
+  var hadInterval = !!sponsorRotationInterval;
+
+  // Wenn dies die erste Initialisierung ist
+  if (!sponsorUrls.length) {
+    sponsorUrls = newUrls;
+    currentSponsorIndex = 0;
+    showCurrentSponsor();
+    if (!hadInterval) sponsorRotationInterval = setInterval(rotateSponsor, 20000);
+    return;
   }
-  sponsorRotationInterval = setInterval(rotateSponsor, 20000);
+
+  // Prüfe, ob sich die Liste tatsächlich geändert hat (gleiche Reihenfolge und Inhalte)
+  var isSameList = sponsorUrls.length === newUrls.length && sponsorUrls.every(function(u, i){ return u === newUrls[i]; });
+  if (isSameList) {
+    // Nichts zu tun, Rotation und Index behalten
+    if (!hadInterval) sponsorRotationInterval = setInterval(rotateSponsor, 20000);
+    return;
+  }
+
+  // Versuche den aktuellen Sponsor in der neuen Liste wiederzufinden
+  var currentUrl = sponsorUrls[currentSponsorIndex] || '';
+  sponsorUrls = newUrls;
+  var foundIndex = sponsorUrls.indexOf(currentUrl);
+  if (foundIndex >= 0) {
+    currentSponsorIndex = foundIndex;
+  } else {
+    // Falls aktueller nicht mehr existiert, klemme Index in neue Länge
+    currentSponsorIndex = currentSponsorIndex % sponsorUrls.length;
+  }
+
+  // Zeige den (ggf. gleichen) aktuellen Sponsor aus der neuen Liste
+  showCurrentSponsor();
+
+  // Intervall nicht neu starten, um gleichmäßige Zeitabstände zu bewahren
+  if (!hadInterval) sponsorRotationInterval = setInterval(rotateSponsor, 20000);
 }
 
 function showCurrentSponsor() {
@@ -285,12 +313,12 @@ function rotateSponsor() {
   showCurrentSponsor();
 }
 
-/* Logos laden und Sponsor-Rotation starten */
+/* Logos laden und Sponsor-Rotation aktualisieren */
 function refreshLogos(){
   return j("/api/logos")
     .then(function(res){
       var urls = (res && res.logos && res.logos.length) ? res.logos : ["/public/placeholder.svg"];
-      initSponsorRotation(urls);
+      updateSponsorRotation(urls);
     })
     .catch(function(err){
       console.error("Logo fetch error:", err);
@@ -449,6 +477,16 @@ function refreshScore(){
         (!isEventRegression && !isEventEqualTime) ||
         (newEventTs === null || currentEventTs === null && newEvent !== currentEvent)
       ));
+
+    // Safety: Im Vorbereitungszustand mit 0:0 immer das neue Event übernehmen
+    if (!shouldUpdateEvent && newStatus === 'Vorbereitung' && newHomeGoals === 0 && newAwayGoals === 0) {
+      dbg('CLIENT_PREGAME_FORCE_EVENT', {
+        reqId: reqId,
+        newEvent: newEvent,
+        currentEvent: currentEvent
+      });
+      shouldUpdateEvent = true;
+    }
       
       // Score regression protection on client side
       var newTotal = newHomeGoals + newAwayGoals;

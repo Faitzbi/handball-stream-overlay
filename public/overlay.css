@@ -461,6 +461,11 @@ html, body {
   min-height: 90px; /* Mehr Höhe für Logo */
   min-width: 200px; /* Mehr Breite für Logo */
   padding: 4px; /* Weniger Padding für mehr Logo-Platz */
+  position: relative;
+  background: var(--white); /* Vollflächiger weißer Hintergrund */
+  border-radius: var(--border-radius-sm); /* Weiche Ecken innerhalb des Rahmens */
+  overflow: hidden; /* Hintergrund deckt Kanten sauber ab */
+  z-index: 1; /* Über Container-Hintergrund/Blur und unter dem Bild */
 }
 
 .sponsor-logo {

@@ -114,6 +114,181 @@ function hasRealChanges(newData, currentData) {
   return fields.some(field => newData[field] !== currentData[field]);
 }
 
+// Helper: placeholder detection for team names
+function isPlaceholderTeam(name) {
+  const s = (name || '').trim().toLowerCase();
+  return s === '' || s === 'heim' || s === 'gast';
+}
+
+// Helper: dedupe/canonicalize event text after building
+function dedupeEventText(text) {
+  if (!text) return '';
+  let t = String(text).trim().replace(/\s+/g, ' ');
+  // Remove duplicated canonical phrases
+  t = t.replace(/((?:\d{1,2}:\d{2})\s*-\s*[^-]+?)(?:\s+\1)+/gi, '$1');
+  t = t.replace(/(Tor durch [^(]+\([^)]*\))(?:\s+\1)+/gi, '$1');
+  t = t.replace(/(7-Meter\s+Tor durch [^(]+\([^)]*\))(?:\s+\1)+/gi, '$1');
+  t = t.replace(/(7-Meter verworfen \([^)]+\))(?:\s+\1)+/gi, '$1');
+  t = t.replace(/(2 Minuten für [^(]+\([^)]+\))(?:\s+\1)+/gi, '$1');
+  t = t.replace(/(Timeout\s+[^-]+)(?:\s+\1)+/gi, '$1');
+  return t;
+}
+
+// Helper: Build canonical text from structured fields
+function buildCanonicalEventFromStructured(time, type, playerName, teamName) {
+  const mmss = (time || '').trim();
+  const player = (playerName || '').trim();
+  const team = (teamName || '').trim();
+  let base = '';
+  const t = (type || '').toLowerCase();
+  if (t === 'goal' || t === 'tor') {
+    base = `${mmss} - Tor durch ${player} (${team})`;
+  } else if (t === 'timeout') {
+    base = `${mmss} - Timeout ${team}`;
+  } else if (t === 'penalty' || t === '2min' || t === '2-min' || t === 'timepenalty') {
+    base = `${mmss} - 2 Minuten für ${player} (${team})`;
+  } else if (t === '7m_goal' || t === '7m-tor' || t === '7m-treffer') {
+    base = `${mmss} - 7-Meter Tor durch ${player} (${team})`;
+  } else if (t === '7m_missed' || t === '7m-verw' || t === '7m-verschossen') {
+    const who = player && team ? `${player}/${team}` : (player || team);
+    base = `${mmss} - 7-Meter verworfen (${who})`;
+  } else {
+    base = `${mmss} - ${t}`;
+  }
+  const deduped = dedupeEventText(base);
+  if (DEBUG && base !== deduped) {
+    dbg('EVENT_CANONICALIZED', { before: base.slice(0, 140), after: deduped.slice(0, 140) });
+  }
+  return deduped;
+}
+
+// Preserve non-placeholder teams if incoming data contains placeholders
+function preserveTeamsIfPlaceholder(newScoreData, currentScore) {
+  const merged = { ...newScoreData };
+  if (isPlaceholderTeam(merged.homeTeam) && !isPlaceholderTeam(currentScore.homeTeam)) {
+    merged.homeTeam = currentScore.homeTeam;
+  }
+  if (isPlaceholderTeam(merged.awayTeam) && !isPlaceholderTeam(currentScore.awayTeam)) {
+    merged.awayTeam = currentScore.awayTeam;
+  }
+  return merged;
+}
+
+// Helper: Build canonical text from HTML icon + raw text
+function buildCanonicalEventFromHtml(timeText, iconAlt, rawEventText, homeTeam, awayTeam) {
+  const mmss = (timeText || '').trim();
+  let eventText = (rawEventText || '').trim();
+  // Strip time and score remnants from raw text
+  if (eventText) {
+    eventText = eventText.replace(/\b\d{1,2}:\d{2}\b/g, '');
+    eventText = eventText.replace(/\b\d{1,2}\s*[:\/-]\s*\d{1,2}\b/g, '');
+    eventText = eventText.replace(/\s+/g, ' ').trim();
+  }
+
+  const alt = (iconAlt || '').toLowerCase();
+  const raw = eventText;
+  let player = '';
+  let team = '';
+  // Try pattern "... durch PLAYER (TEAM)"
+  let m = eventText.match(/durch\s+([^()]+?)\s*\(([^)]+)\)/i);
+  if (m) {
+    player = (m[1] || '').trim();
+    team = (m[2] || '').trim();
+  } else {
+    // Try "PLAYER (TEAM)"
+    m = eventText.match(/([^()]+?)\s*\(([^)]+)\)/);
+    if (m) {
+      player = (m[1] || '').trim();
+      team = (m[2] || '').trim();
+    }
+  }
+  // As fallback, infer team by containment
+  const homeL = (homeTeam || '').toLowerCase();
+  const awayL = (awayTeam || '').toLowerCase();
+  if (!team) {
+    const lower = eventText.toLowerCase();
+    if (homeL && lower.includes(homeL)) team = homeTeam;
+    else if (awayL && lower.includes(awayL)) team = awayTeam;
+  }
+
+  let canonicalType = '';
+  if (alt.includes('timeout')) canonicalType = 'timeout';
+  else if (alt.includes('zeitstrafe') || alt.includes('2 minuten')) canonicalType = '2min';
+  else if (alt.includes('tor')) {
+    // Distinguish 7m
+    if (/7\s*-?\s*meter|siebenmeter|7m/i.test(raw)) {
+      if (/verworfen|verw\.|verschossen/i.test(raw) || alt.includes('verw')) canonicalType = '7m_missed';
+      else canonicalType = '7m_goal';
+    } else {
+      canonicalType = 'goal';
+    }
+  } else if (/7\s*-?\s*meter|siebenmeter|7m/i.test(raw)) {
+    // No clear icon, infer from text
+    canonicalType = /verworfen|verw\.|verschossen/i.test(raw) ? '7m_missed' : '7m_goal';
+  } else {
+    canonicalType = alt || raw;
+  }
+
+  const built = buildCanonicalEventFromStructured(mmss, canonicalType, player, team);
+  if (DEBUG && raw && built && !built.toLowerCase().includes(raw.toLowerCase())) {
+    dbg('EVENT_CANONICALIZED', { before: `${mmss} - ${raw}`.slice(0, 140), after: built.slice(0, 140) });
+  }
+  return { event: built, scorer: player };
+}
+
+// Valid-Packet Gate
+function isValidPacket(nextData, currentData, ctx) {
+  const reasons = [];
+  const nextHome = (nextData.homeTeam || '').trim();
+  const nextAway = (nextData.awayTeam || '').trim();
+  const curHome = (currentData.homeTeam || '').trim();
+  const curAway = (currentData.awayTeam || '').trim();
+
+  if (!nextHome || !nextAway) {
+    reasons.push('emptyTeams');
+  }
+
+  const nextHasPlaceholder = isPlaceholderTeam(nextHome) || isPlaceholderTeam(nextAway);
+  const curBothPlaceholder = isPlaceholderTeam(curHome) && isPlaceholderTeam(curAway);
+  if (nextHasPlaceholder && !curBothPlaceholder) {
+    reasons.push('placeholderTeams');
+  }
+
+  const hg = nextData.homeGoals;
+  const ag = nextData.awayGoals;
+  const goalsFinite = Number.isFinite(hg) && Number.isFinite(ag);
+  if (!goalsFinite) reasons.push('missingScore');
+  if (goalsFinite && (hg < 0 || ag < 0 || hg > 80 || ag > 80)) reasons.push('implausibleScore');
+
+  const sourceStamp = ctx && typeof ctx.sourceStamp === 'number' ? ctx.sourceStamp : null;
+  const lastSourceStamp = ctx && typeof ctx.lastSourceStamp === 'number' ? ctx.lastSourceStamp : null;
+  const isGameSwitch = !!(ctx && ctx.isGameSwitch);
+  if (sourceStamp !== null && lastSourceStamp !== null) {
+    if (!isGameSwitch && sourceStamp <= lastSourceStamp) {
+      reasons.push('staleStamp');
+    }
+  }
+
+  // If totally unreliable: placeholders and missing/zeroed score
+  if (nextHasPlaceholder && (!goalsFinite || (hg === 0 && ag === 0)) && (!nextData.lastEvent || nextData.lastEvent.trim() === '')) {
+    reasons.push('noReliableFields');
+  }
+
+  if (reasons.length > 0) {
+    dbg('VALIDATION_REJECT', {
+      reqId: ctx && ctx.reqId,
+      reasons: Array.from(new Set(reasons)),
+      preview: {
+        homeTeam: nextHome, awayTeam: nextAway,
+        homeGoals: hg, awayGoals: ag,
+        lastEvent: (nextData.lastEvent || '').slice(0, 120)
+      }
+    });
+    return false;
+  }
+  return true;
+}
+
 // Calculate a content-based source stamp for HTML path
 function calculateHtmlSourceStamp(parsed) {
   const eventSeconds = extractGameTime(parsed && parsed.lastEvent ? parsed.lastEvent : '');
@@ -388,10 +563,17 @@ chokidar.watch(LOGO_DIR, { ignoreInitial: true })
   .on('change', readSponsorLogos);
 
 app.get('/api/logos', (req, res) => {
-  const files = fs.readdirSync(LOGO_DIR)
-    .filter(f => /\.(png|jpe?g|gif|svg|webp)$/i.test(f))
-    .map(f => `/assets/logos/${encodeURIComponent(f)}`);
-  res.json({ logos: files });
+  try {
+    // Read, filter and sort logos deterministically (natural filename order)
+    const entries = fs.readdirSync(LOGO_DIR)
+      .filter(f => /\.(png|jpe?g|gif|svg|webp)$/i.test(f))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+      .map(f => `/assets/logos/${encodeURIComponent(f)}`);
+    res.json({ logos: entries });
+  } catch (e) {
+    console.error('[logos] Error listing logos:', e.message);
+    res.json({ logos: [] });
+  }
 });
 
 app.get('/api/score', (req, res) => res.json(readJSON(SCORE_FILE, {})));
@@ -500,7 +682,7 @@ function parseCombinedJSON(json, currentScore) {
 
   console.log(`[debug] Logos: Home=${homeLogoUrl}, Away=${awayLogoUrl}`);
 
-  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl };
+  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl, eventsCount: allEvents.length };
 }
 
 // HTML-Parser für handball.net Ticker-Seite
@@ -508,6 +690,8 @@ async function parseTickerHTML(html, baseUrl) {
   const cheerio = require('cheerio');
   const $ = cheerio.load(html);
   
+  // Controls whether we allow body-level fallbacks that might confuse kickoff time with score
+  let allowBodyScoreFallback = false;
 
   // Teamnamen aus der Seite extrahieren
   let homeTeam = 'Heim', awayTeam = 'Gast';
@@ -613,8 +797,8 @@ async function parseTickerHTML(html, baseUrl) {
     }
   }
   
-  // Fallback: Suche im gesamten Text
-  if (homeGoals === 0 && awayGoals === 0) {
+  // Fallback: Suche im gesamten Text NUR wenn Events vorhanden (sonst riskieren wir Kickoff-Zeit)
+  if (homeGoals === 0 && awayGoals === 0 && allowBodyScoreFallback) {
     const allText = $('body').text();
     const scorePatterns = [
       /(\d{1,2})\s*:\s*(\d{1,2})/,
@@ -625,8 +809,15 @@ async function parseTickerHTML(html, baseUrl) {
     for (const pattern of scorePatterns) {
       const match = allText.match(pattern);
       if (match) {
-        homeGoals = parseInt(match[1], 10);
-        awayGoals = parseInt(match[2], 10);
+        const a = parseInt(match[1], 10);
+        const b = parseInt(match[2], 10);
+        // Heuristik: vermeide offensichtliche Uhrzeiten wie 19:30 im Pre-Game
+        if ((a <= 15 && b >= 30) || (a >= 18 && b <= 45)) {
+          // looks like kickoff time; skip
+          continue;
+        }
+        homeGoals = a;
+        awayGoals = b;
         break;
       }
     }
@@ -637,6 +828,7 @@ async function parseTickerHTML(html, baseUrl) {
   
   // Bei Live-Spielen: Suche nach dem neuesten Tor-Event (nicht Unterbrechung)
   const allEvents = $('.tik3-flex-event');
+  allowBodyScoreFallback = allEvents.length > 0;
   for (let i = 0; i < allEvents.length; i++) {
     const event = allEvents.eq(i);
     const timeEl = event.find('.tik3-even-item-meta-state-text');
@@ -712,8 +904,8 @@ async function parseTickerHTML(html, baseUrl) {
     clock = '00:00';
   }
   
-  // Fallback: Suche im gesamten Text
-  if (clock === '00:00') {
+  // Fallback: Suche im gesamten Text NUR wenn Events vorhanden (ansonsten riskieren wir Kickoff-Zeit)
+  if (clock === '00:00' && allowBodyScoreFallback) {
     const allText = $('body').text();
     const timePatterns = [
       /\b([0-5]?\d:[0-5]\d)\b/,
@@ -724,6 +916,10 @@ async function parseTickerHTML(html, baseUrl) {
     for (const pattern of timePatterns) {
       const match = allText.match(pattern);
       if (match) {
+        const minutes = parseInt(match[1].split(':')[0], 10);
+        const seconds = parseInt(match[1].split(':')[1], 10);
+        // avoid typical kickoff times like 19:30 etc.
+        if (minutes >= 18 && seconds >= 15) continue;
         clock = match[1];
         break;
       }
@@ -734,7 +930,7 @@ async function parseTickerHTML(html, baseUrl) {
   let period = '';
   
   // Suche nach Spielstatus - neue handball.net Struktur
-  const statusEl = $('.rounded-b.px-1').first();
+  const statusEl = $('.rounded-b.px-1, .bg-primary.text-white.font-semibold, .status, [class*="status"]').first();
   if (statusEl.length) {
     const statusText = statusEl.text().trim();
     if (statusText.includes('beendet')) {
@@ -743,6 +939,8 @@ async function parseTickerHTML(html, baseUrl) {
       period = 'Jetzt Live!';
     } else if (statusText.includes('Halbzeit')) {
       period = statusText;
+    } else if (/noch nicht begonnen|vorbereitung|start|beginn/i.test(statusText)) {
+      period = 'Vorbereitung';
     }
   }
   
@@ -766,11 +964,13 @@ async function parseTickerHTML(html, baseUrl) {
   
   // Fallback: Suche nach "Jetzt Live!" Status
   if (!period) {
-    const liveStatusEl = $('.bg-primary.text-white.font-semibold').first();
+    const liveStatusEl = $('.bg-primary.text-white.font-semibold, .status, [class*="status"]').first();
     if (liveStatusEl.length) {
       const liveText = liveStatusEl.text().trim();
       if (liveText.includes('Jetzt Live!')) {
         period = 'Jetzt Live!';
+      } else if (/noch nicht begonnen|vorbereitung|start|beginn/i.test(liveText)) {
+        period = 'Vorbereitung';
       }
     }
   }
@@ -874,98 +1074,14 @@ async function parseTickerHTML(html, baseUrl) {
         eventText = eventText.replace(/(.+?)\1{2,}/g, '$1');
       }
       
-      // Erstelle detailliertes Event-Format basierend auf Event-Typ
-      let detailedEvent = '';
-      
-      
-      if (iconAlt === 'Tor') {
-        // Tor: "Zeit - Tor durch [Spieler] für [Team]"
-        if (eventText && eventText.length > 0) {
-          // Extrahiere Spielername und Team aus dem Event-Text
-          let playerName = '';
-          let teamInfo = '';
-          
-          // Prüfe ob es ein 7-Meter-Tor ist
-          if (eventText.includes('7-Meter') || eventText.includes('Siebenmeter')) {
-            // 7-Meter-Tor: Behalte den ursprünglichen Text bei
-            detailedEvent = `${timeText} - ${eventText}`;
-            // Extrahiere Spielername für lastScorer
-            const playerMatch = eventText.match(/durch\s+([^(]+)\s*\(/);
-            if (playerMatch) {
-              lastScorer = playerMatch[1].trim();
-            } else {
-              lastScorer = eventText;
-            }
-          } else {
-            // Normales Tor: Parse "Tor durch 9. (TV Wickede-Ruhr 2)" Format
-            const torMatch = eventText.match(/Tor durch ([^(]+)\s*\(([^)]+)\)/);
-            if (torMatch) {
-              playerName = torMatch[1].trim();
-              const teamName = torMatch[2].trim();
-              
-              // BEHALTE den ursprünglichen Team-Namen für normale Tore
-              detailedEvent = `${timeText} - Tor durch ${playerName} (${teamName})`;
-              lastScorer = playerName;
-            } else {
-              // Fallback: Verwende den gesamten Event-Text
-              detailedEvent = `${timeText} - ${eventText}`;
-              lastScorer = eventText;
-            }
-          }
-        } else {
-          detailedEvent = `${timeText} - Tor`;
-        }
-      } else if (iconAlt === 'Timeout') {
-        // Timeout: "Zeit - Timeout für [Team]"
-        let teamInfo = '';
-        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
-          teamInfo = '(Heim)';
-        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
-          teamInfo = '(Gast)';
-        }
-        detailedEvent = `${timeText} - Timeout für ${eventText} ${teamInfo}`;
-      } else if (iconAlt === 'Zeitstrafe' || iconAlt === '2 Minuten') {
-        // Zeitstrafe: "Zeit - 2 Minuten für [Spieler] ([Team])"
-        let teamInfo = '';
-        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
-          teamInfo = '(Heim)';
-        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
-          teamInfo = '(Gast)';
-        }
-        detailedEvent = `${timeText} - 2 Minuten für ${eventText} ${teamInfo}`;
-      } else if (iconAlt === 'Gelbe Karte' || iconAlt === 'Gelb') {
-        // Gelbe Karte: "Zeit - Gelbe Karte für [Spieler] ([Team])"
-        let teamInfo = '';
-        if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
-          teamInfo = '(Heim)';
-        } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
-          teamInfo = '(Gast)';
-        }
-        detailedEvent = `${timeText} - Gelbe Karte für ${eventText} ${teamInfo}`;
-               } else if (iconAlt === 'Rote Karte' || iconAlt === 'Rot') {
-                 // Rote Karte: "Zeit - Rote Karte für [Spieler] ([Team])"
-                 let teamInfo = '';
-                 if (eventText.toLowerCase().includes(homeTeam.toLowerCase())) {
-                   teamInfo = '(Heim)';
-                 } else if (eventText.toLowerCase().includes(awayTeam.toLowerCase())) {
-                   teamInfo = '(Gast)';
-                 }
-                 detailedEvent = `${timeText} - Rote Karte für ${eventText} ${teamInfo}`;
-               } else if (iconAlt === 'Ende' || iconAlt === 'Spielabschluss') {
-                 // Spielende: "Zeit - Spiel beendet"
-                 detailedEvent = `${timeText} - Spiel beendet`;
-               } else {
-                 // Andere Events: "Zeit - [Event]"
-                 detailedEvent = `${timeText} - ${iconAlt}`;
-                 if (eventText) {
-                   detailedEvent += ` (${eventText})`;
-                 }
-               }
-               
-      
-               // Event wird sofort gesetzt - keine Stabilisierung nötig
-               lastEvent = detailedEvent;
-               console.log('[debug] lastEvent gesetzt:', lastEvent);
+      // Canonicalize via builder to avoid duplicated phrases
+      const built = buildCanonicalEventFromHtml(timeText, iconAlt, eventText, homeTeam, awayTeam);
+      const detailedEvent = built.event;
+      if (built.scorer) lastScorer = built.scorer;
+
+      // Event wird sofort gesetzt - keine Stabilisierung nötig
+      lastEvent = detailedEvent;
+      console.log('[debug] lastEvent gesetzt:', lastEvent);
       
       // Clock wird nicht mehr benötigt - Zeit ist bereits in lastEvent enthalten
       // clock = timeText; // Entfernt - redundant mit lastEvent
@@ -1000,6 +1116,20 @@ async function parseTickerHTML(html, baseUrl) {
   }
   
   // Zusätzliche Halbzeit-Erkennung aus Events entfernt
+  
+  // Pregame handling: if no events and score is 0:0, enforce pregame defaults
+  const hasAnyEvents = allEvents && allEvents.length > 0;
+  const isClearPregame = !hasAnyEvents && homeGoals === 0 && awayGoals === 0;
+  if (isClearPregame) {
+    if (homeGoals !== 0 || awayGoals !== 0 || lastEvent !== '00:00 - Spiel noch nicht gestartet' || gameStatus !== 'Vorbereitung') {
+      dbg('PREGAME_ENFORCED', { homeGoals, awayGoals, clock, period, gameStatus });
+    }
+    homeGoals = 0;
+    awayGoals = 0;
+    lastScorer = '';
+    lastEvent = '00:00 - Spiel noch nicht gestartet';
+    gameStatus = 'Vorbereitung';
+  }
 
   // Team-Logos
   let homeLogoUrl = '', awayLogoUrl = '';
@@ -1062,6 +1192,25 @@ async function fetchOnce() {
     
     if (!tickerUrl) {
       dbg('POLL_SKIP', { reqId, reason: 'no tickerUrl' });
+      // Ensure pregame default state when no ticker URL available
+      const currentScore = readJSON(SCORE_FILE, {});
+      const pre = {
+        homeTeam: currentScore.homeTeam || 'Heim',
+        awayTeam: currentScore.awayTeam || 'Gast',
+        homeGoals: 0,
+        awayGoals: 0,
+        period: currentScore.period || '',
+        lastScorer: '',
+        lastEvent: '00:00 - Spiel noch nicht gestartet',
+        gameStatus: 'Vorbereitung',
+        homeLogoUrl: currentScore.homeLogoUrl || '',
+        awayLogoUrl: currentScore.awayLogoUrl || '',
+        lastSourceStamp: currentScore.lastSourceStamp || 0
+      };
+      if (hasRealChanges(pre, currentScore)) {
+        writeJSON(SCORE_FILE, pre);
+        dbg('WRITE_ACCEPTED', { reqId, changes: Object.keys(pre).filter(k => pre[k] !== currentScore[k]) });
+      }
       return;
     }
 
@@ -1149,16 +1298,18 @@ async function fetchOnce() {
       let isStalePacket = false;
       let isGameSwitch = false;
       
-      if (parsed.gameStatus === 'Live') {
-        // Skip sourceStamp check for live games - always allow updates
-        isGameSwitch = detectGameSwitch(parsed, currentScore);
-        isStalePacket = false;
-      } else {
-        // Calculate monotonic sourceStamp for non-live games
-        const sourceStamp = calculateSourceStamp(json.data?.summary, json.data?.events);
-        const lastSourceStamp = currentScore.lastSourceStamp || 0;
-        isGameSwitch = detectGameSwitch(parsed, currentScore);
-        isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+      // Calculate monotonic sourceStamp from JSON content (always when available)
+      const sourceStamp = calculateSourceStamp(json.data?.summary, json.data?.events);
+      const lastSourceStamp = currentScore.lastSourceStamp || 0;
+      isGameSwitch = detectGameSwitch(parsed, currentScore);
+      isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+      
+      // Pregame candidate: allow reset to 0:0 even if it looks like a regression
+      const pregameCandidateJSON = (parsed.homeGoals === 0 && parsed.awayGoals === 0);
+      if (pregameCandidateJSON) {
+        if (!isGameSwitch) dbg('PREGAME_RESET_ALLOWED', { reqId, path: 'JSON', reason: '0:0 score in packet' });
+        isGameSwitch = true;
+        isStalePacket = false; // allow initial write of pregame baseline
       }
       
       dbg('VERSIONING', {
@@ -1206,29 +1357,33 @@ async function fetchOnce() {
       if (newestEvent) {
         const newEventTime = extractGameTime(newestEvent.gameTime || newestEvent.time || '');
         const currentEventTime = extractGameTime(currentScore.lastEvent || '');
-        
         if (newEventTime >= currentEventTime) {
-          // Build event string from newest event
           const eventTime = newestEvent.gameTime || newestEvent.time || '';
           const eventType = newestEvent.type || newestEvent.eventType || '';
           const playerName = newestEvent.playerName || newestEvent.player || '';
           const teamName = newestEvent.teamName || newestEvent.team || '';
-          
-          if (eventType === 'goal' || eventType === 'tor') {
-            finalEvent = `${eventTime} - Tor durch ${playerName} (${teamName})`;
-            finalScorer = playerName;
-          } else if (eventType === 'timeout') {
-            finalEvent = `${eventTime} - Timeout für ${teamName}`;
-          } else if (eventType === 'penalty' || eventType === '2min') {
-            finalEvent = `${eventTime} - 2 Minuten für ${playerName} (${teamName})`;
+          // If score is 0:0 or status indicates pregame, override with pregame default
+          const predictedHome = protectedScore.homeGoals;
+          const predictedAway = protectedScore.awayGoals;
+          if (predictedHome === 0 && predictedAway === 0) {
+            finalEvent = '00:00 - Spiel noch nicht gestartet';
+            finalScorer = '';
           } else {
-            finalEvent = `${eventTime} - ${eventType}`;
+            finalEvent = buildCanonicalEventFromStructured(eventTime, eventType, playerName, teamName);
+            finalScorer = playerName || finalScorer;
           }
+        } else if (DEBUG) {
+          dbg('STALE_EVENT_IGNORED', {
+            reqId,
+            newEventTime,
+            currentEventTime,
+            newestEvent: (newestEvent && (newestEvent.type || newestEvent.eventType)) || 'unknown'
+          });
         }
       }
       
-      // Build final data
-      const newScoreData = {
+    // Build final data
+      let newScoreData = {
         homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
         awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
         homeGoals: protectedScore.homeGoals,
@@ -1241,11 +1396,31 @@ async function fetchOnce() {
         awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
         lastSourceStamp: sourceStamp
       };
+
+      // If clearly pregame (no events, score 0:0, non-live), enforce default lastEvent
+    if (newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0) {
+      newScoreData.gameStatus = 'Vorbereitung';
+      newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
+      newScoreData.lastScorer = '';
+    }
+
+      // Preserve teams against placeholder downgrade
+      newScoreData = preserveTeamsIfPlaceholder(newScoreData, currentScore);
+
+      // Valid packet gate
+      if (!isValidPacket(newScoreData, currentScore, { reqId, sourceStamp, lastSourceStamp, isGameSwitch })) {
+        return;
+      }
       
       // Deep diff check
       if (!hasRealChanges(newScoreData, currentScore)) {
-        dbg('NO_CHANGES', { reqId, reason: 'no real changes detected' });
-        return;
+        // If we're transitioning into pregame default event, still write to clear stale lastEvent
+        const isClearingStaleEvent = (currentScore.lastEvent && currentScore.lastEvent !== newScoreData.lastEvent) &&
+          newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0;
+        if (!isClearingStaleEvent) {
+          dbg('NO_CHANGES', { reqId, reason: 'no real changes detected' });
+          return;
+        }
       }
       
       // Update config with logos
@@ -1269,10 +1444,8 @@ async function fetchOnce() {
       // Atomic write
       writeJSON(SCORE_FILE, newScoreData);
       
-      dbg('WRITE_DECISION', {
+      dbg('WRITE_ACCEPTED', {
         reqId,
-        action: 'accepted',
-        data: newScoreData,
         changes: Object.keys(newScoreData).filter(key => newScoreData[key] !== currentScore[key])
       });
       
@@ -1318,14 +1491,18 @@ async function fetchOnce() {
     let isStalePacket = false;
     let isGameSwitch = false;
     
-    if (parsed.gameStatus === 'Live') {
-      // Skip sourceStamp check for live games - always allow updates
-      isGameSwitch = detectGameSwitch(parsed, currentScore);
-      isStalePacket = false;
-    } else {
-      // Calculate monotonic sourceStamp for non-live games
-      isGameSwitch = detectGameSwitch(parsed, currentScore);
-      isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+    // Always enforce monotonic sourceStamp (content-based) for HTML path
+    isGameSwitch = detectGameSwitch(parsed, currentScore);
+    isStalePacket = !isGameSwitch && sourceStamp <= lastSourceStamp;
+    
+    // If pregame detected (no events + 0:0), treat as non-stale baseline to allow initial write
+    const pregameCandidate = (parsed.eventsCount === 0) &&
+      Number.isFinite(parsed.homeGoals) && Number.isFinite(parsed.awayGoals) &&
+      parsed.homeGoals === 0 && parsed.awayGoals === 0;
+    if (pregameCandidate) {
+      if (!isGameSwitch) dbg('PREGAME_RESET_ALLOWED', { reqId, path: 'HTML', reason: '0:0 and no events' });
+      isGameSwitch = true; // allow score reset to 0:0
+      if (lastSourceStamp === 0) isStalePacket = false; // permit initial baseline
     }
     
     dbg('VERSIONING_HTML', {
@@ -1360,15 +1537,22 @@ async function fetchOnce() {
       const newEventTime = extractGameTime(parsed.lastEvent);
       const currentEventTime = extractGameTime(currentScore.lastEvent || '');
       
-      // Allow updates for live games
-      if (parsed.gameStatus === 'Live' || newEventTime >= currentEventTime) {
-        finalEvent = parsed.lastEvent;
+      if (newEventTime >= currentEventTime) {
+        finalEvent = dedupeEventText(parsed.lastEvent);
         finalScorer = parsed.lastScorer || '';
+      } else if (DEBUG) {
+        dbg('STALE_EVENT_IGNORED', { reqId, newEventTime, currentEventTime });
       }
     }
     
+    // Strong pregame override: if protected score is 0:0, force default event
+    if (protectedScore.homeGoals === 0 && protectedScore.awayGoals === 0) {
+      finalEvent = '00:00 - Spiel noch nicht gestartet';
+      finalScorer = '';
+    }
+    
     // Build final data
-    const newScoreData = {
+    let newScoreData = {
       homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
       awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
       homeGoals: protectedScore.homeGoals,
@@ -1381,11 +1565,30 @@ async function fetchOnce() {
       awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
       lastSourceStamp: sourceStamp
     };
+
+    // Pregame default for HTML path
+    if (newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0) {
+      newScoreData.gameStatus = 'Vorbereitung';
+      newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
+      newScoreData.lastScorer = '';
+    }
+
+    // Preserve teams against placeholder downgrade
+    newScoreData = preserveTeamsIfPlaceholder(newScoreData, currentScore);
+
+    // Valid packet gate
+    if (!isValidPacket(newScoreData, currentScore, { reqId, sourceStamp, lastSourceStamp, isGameSwitch })) {
+      return;
+    }
     
     // Deep diff check
     if (!hasRealChanges(newScoreData, currentScore)) {
-      dbg('NO_CHANGES_HTML', { reqId, reason: 'no real changes detected' });
-      return;
+      const isClearingStaleEvent = (currentScore.lastEvent && currentScore.lastEvent !== newScoreData.lastEvent) &&
+        newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0;
+      if (!isClearingStaleEvent) {
+        dbg('NO_CHANGES_HTML', { reqId, reason: 'no real changes detected' });
+        return;
+      }
     }
     
     // Update config with logos
@@ -1409,10 +1612,8 @@ async function fetchOnce() {
     // Atomic write
     writeJSON(SCORE_FILE, newScoreData);
     
-    dbg('WRITE_DECISION_HTML', {
+    dbg('WRITE_ACCEPTED', {
       reqId,
-      action: 'accepted',
-      data: newScoreData,
       changes: Object.keys(newScoreData).filter(key => newScoreData[key] !== currentScore[key])
     });
     

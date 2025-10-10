@@ -1,14 +1,13 @@
 {
-  "homeTeam": "HSG Kastellaun/Simmern",
-  "awayTeam": "HV Vallendar",
-  "homeGoals": 34,
-  "awayGoals": 32,
-  "period": "Spiel beendet",
-  "lastScorer": "Josip Grbavac",
-  "lastEvent": "60:00 - Spiel beendet",
-  "gameStatus": "Beendet",
-  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/240ee99b-7992-41f5-a4e7-a52060141142.png?d=100x",
-  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/ec40f535-dbb4-4f85-a737-ffbb4de99706.jpeg?d=100x",
-  "lastSourceStamp": 3600065,
-  "clock": "60:00"
+  "homeTeam": "HG Owschlag-Kropp-Tetenhusen",
+  "awayTeam": "HG Owschlag-Kropp-Tetenhusen 2",
+  "homeGoals": 12,
+  "awayGoals": 8,
+  "period": "Halbzeit",
+  "lastScorer": "Henry Luca Held",
+  "lastEvent": "19:11 - Tor durch Henry Luca Held (4.)",
+  "gameStatus": "Live",
+  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
+  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
+  "lastSourceStamp": 1151020
 }
