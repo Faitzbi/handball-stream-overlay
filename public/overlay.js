@@ -6,6 +6,8 @@ var stableEventText = "";
 // Debug helper function for client-side
 var DEBUG = window.location.search.includes('debug=1') || localStorage.getItem('DEBUG') === '1';
 var clientReqIdCounter = 0;
+var scoreAnimTimeout = null; // cleanup for score highlight
+var barAnimTimeout = null;   // cleanup for bar glow classes
 
 function dbg(section, obj) {
   if (!DEBUG) return;
@@ -544,13 +546,21 @@ function refreshScore(){
         if (isRealGoal) {
           console.log("Echtes Tor erkannt - Animation wird getriggert");
           
-          // Score-Sektion Flash-Effekt
-          var section = $(".score-section");
-          if (section){
-            section.classList.add("flash");
-            setTimeout(function(){ section.classList.remove("flash"); }, 1800);
-          }
+          // Alter Score-Flash entfernt
           
+          // Score-Container und konkrete Zahl hervorheben
+          var scoreMain = document.querySelector('.score-main');
+          var homeNumEl = $("#homeGoals");
+          var awayNumEl = $("#awayGoals");
+
+          // Entferne vorherige Klassen und Timer
+          if (scoreMain) {
+            scoreMain.classList.remove('scored-home', 'scored-away');
+          }
+          if (homeNumEl) homeNumEl.classList.remove('scored-home', 'scored-away');
+          if (awayNumEl) awayNumEl.classList.remove('scored-home', 'scored-away');
+          if (scoreAnimTimeout) { clearTimeout(scoreAnimTimeout); scoreAnimTimeout = null; }
+
           // Gesamter Balken Tor-Animation mit Team-Erkennung
           var broadcastBar = $(".broadcast-container");
           if (broadcastBar){
@@ -578,11 +588,15 @@ function refreshScore(){
             
             if (isHomeGoal) {
               broadcastBar.classList.add("goal-animation", "home-goal");
+              if (scoreMain) scoreMain.classList.add('scored-home');
+              if (homeNumEl) homeNumEl.classList.add('scored-home');
               if (isOurTeam && s.lastScorer) {
                 showPlayerGoal(s.lastScorer, false);
               }
             } else if (isAwayGoal) {
               broadcastBar.classList.add("goal-animation", "away-goal");
+              if (scoreMain) scoreMain.classList.add('scored-away');
+              if (awayNumEl) awayNumEl.classList.add('scored-away');
               if (isOurTeam && s.lastScorer) {
                 showPlayerGoal(s.lastScorer, false);
               }
@@ -593,9 +607,19 @@ function refreshScore(){
               }
             }
             
-            setTimeout(function(){ 
+            if (barAnimTimeout) { clearTimeout(barAnimTimeout); }
+            barAnimTimeout = setTimeout(function(){ 
               broadcastBar.classList.remove("goal-animation", "home-goal", "away-goal"); 
-            }, 2000);
+            }, 1000);
+          }
+
+          // Cleanup der Score-Highlights (Container + Zahlen)
+          if (scoreMain || homeNumEl || awayNumEl) {
+            scoreAnimTimeout = setTimeout(function(){
+              if (scoreMain) scoreMain.classList.remove('scored-home', 'scored-away');
+              if (homeNumEl) homeNumEl.classList.remove('scored-home', 'scored-away');
+              if (awayNumEl) awayNumEl.classList.remove('scored-home', 'scored-away');
+            }, 1000);
           }
         }
         

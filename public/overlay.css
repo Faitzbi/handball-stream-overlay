@@ -667,19 +667,47 @@ html, body {
 
 /* ===== GOAL ANIMATION ===== */
 .broadcast-container.goal-animation {
-  animation: goal-celebration 2.0s ease-out;
+  /* Alte Balken-Animation deaktiviert */
+  animation: none;
 }
 
 .broadcast-container.goal-animation.home-goal {
-  animation: home-goal-celebration 2.0s ease-out;
+  /* Alte Balken-Animation deaktiviert */
+  animation: none;
 }
 
 .broadcast-container.goal-animation.away-goal {
-  animation: away-goal-celebration 2.0s ease-out;
+  /* Alte Balken-Animation deaktiviert */
+  animation: none;
 }
 
 .score-section.flash .score-main {
-  animation: score-flash 1.8s ease-out;
+  /* Alter Score-Flash entfernt */
+  animation: none !important;
+}
+
+/* Directional goal glow on broadcast bar to indicate scoring team */
+.broadcast-container.goal-animation.home-goal::before,
+.broadcast-container.goal-animation.away-goal::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 42%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.broadcast-container.goal-animation.home-goal::before {
+  left: 0;
+  background: radial-gradient(circle at 0% 50%, rgba(40, 193, 71, 0.35), rgba(40, 193, 71, 0.18) 35%, transparent 70%);
+  animation: bar-glow-left 1.0s ease-out;
+}
+
+.broadcast-container.goal-animation.away-goal::before {
+  right: 0;
+  background: radial-gradient(circle at 100% 50%, rgba(40, 193, 71, 0.35), rgba(40, 193, 71, 0.18) 35%, transparent 70%);
+  animation: bar-glow-right 1.0s ease-out;
 }
 
 @keyframes home-goal-celebration {
@@ -812,7 +840,7 @@ html, body {
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
       0 0 0 0 rgba(40, 193, 71, 0.7);
   }
-  50% { 
+  40% { 
     box-shadow: 
       var(--shadow-xl),
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
@@ -824,6 +852,74 @@ html, body {
       inset 0 1px 0 rgba(255, 255, 255, 0.6),
       0 0 0 0 rgba(40, 193, 71, 0);
   }
+}
+
+/* Score container directional glow to indicate which side scored */
+.score-main.scored-home::after,
+.score-main.scored-away::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: -6px;
+  right: -6px;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.score-main.scored-home::after {
+  background: radial-gradient(circle at 15% 50%, rgba(40, 193, 71, 0.35), rgba(40, 193, 71, 0.15) 35%, transparent 65%);
+  animation: score-glow-left 1.0s ease-out;
+}
+
+.score-main.scored-away::after {
+  background: radial-gradient(circle at 85% 50%, rgba(40, 193, 71, 0.35), rgba(40, 193, 71, 0.15) 35%, transparent 65%);
+  animation: score-glow-right 1.0s ease-out;
+}
+
+/* Pop and color-highlight of the scoring number */
+.score-number.scored-home,
+.score-number.scored-away {
+  color: #28c147; /* goal green */
+  text-shadow: 0 4px 10px rgba(40, 193, 71, 0.45), 0 0 20px rgba(40, 193, 71, 0.35);
+  animation: score-number-pop 0.5s ease-out, score-number-fade 1.0s ease-out;
+}
+
+@keyframes score-number-pop {
+  0% { transform: scale(1); }
+  20% { transform: scale(1.25); }
+  45% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+@keyframes score-number-fade {
+  0% { filter: brightness(1.2); }
+  100% { filter: brightness(1); }
+}
+
+/* Sweep animations */
+@keyframes score-glow-left {
+  0% { opacity: 0.85; }
+  35% { opacity: 0.6; }
+  100% { opacity: 0; }
+}
+
+@keyframes score-glow-right {
+  0% { opacity: 0.85; }
+  35% { opacity: 0.6; }
+  100% { opacity: 0; }
+}
+
+@keyframes bar-glow-left {
+  0% { opacity: 0.85; }
+  35% { opacity: 0.5; }
+  100% { opacity: 0; }
+}
+
+@keyframes bar-glow-right {
+  0% { opacity: 0.85; }
+  35% { opacity: 0.5; }
+  100% { opacity: 0; }
 }
 
 /* ===== RESPONSIVE DESIGN ===== */
