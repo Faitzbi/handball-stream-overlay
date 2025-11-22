@@ -58,6 +58,7 @@ async function load() {
     document.getElementById("tickerUrl").value = cfg.tickerUrl || "";
     document.getElementById("homeLogoUrl").value = cfg.homeLogoUrl || "";
     document.getElementById("awayLogoUrl").value = cfg.awayLogoUrl || "";
+    document.getElementById("teamType").value = cfg.teamType || "herren1";
     document.getElementById("overlayLink").textContent = `${location.origin}/overlay`;
 
     // Populate score fields
@@ -83,6 +84,7 @@ document.getElementById("saveCfg").addEventListener("click", async () => {
       tickerUrl: document.getElementById("tickerUrl").value.trim(),
       homeLogoUrl: document.getElementById("homeLogoUrl").value.trim(),
       awayLogoUrl: document.getElementById("awayLogoUrl").value.trim(),
+      teamType: document.getElementById("teamType").value,
     };
     
     await jpost("/api/config", payload);

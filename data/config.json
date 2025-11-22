@@ -1,6 +1,7 @@
 {
-  "tickerUrl": "https://www.handball.net/spiele/handball4all.schleswig-holstein.8940391/ticker",
+  "tickerUrl": "https://hvrheinland-handball.liga.nu/cgi-bin/WebObjects/nuLigaHBDE.woa/wa/groupMeetingReport?meeting=8069458&championship=HVRL+25%2F26&group=448227",
   "homeLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
   "awayLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
-  "mascotUrl": ""
+  "mascotUrl": "",
+  "teamType": "damen1"
 }

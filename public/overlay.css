@@ -514,6 +514,51 @@ html, body {
   }
 }
 
+/* ===== CLUB LOGO DISPLAY ===== */
+.club-logo-display {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 5;
+  pointer-events: auto;
+}
+
+.club-logo-display.hidden {
+  display: none;
+}
+
+.club-logo-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Kein Hintergrund */
+  padding: 0;
+  transition: var(--transition-normal);
+}
+
+.club-logo-container:hover {
+  transform: translateY(-2px);
+}
+
+.club-logo-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  /* Kein Hintergrund */
+}
+
+.club-logo {
+  max-height: 150px;
+  max-width: 150px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  opacity: 0.7; /* 70% sichtbar, 30% transparent */
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition: var(--transition-normal);
+}
+
 /* ===== PLAYER GOAL DISPLAY ===== */
 .player-goal-display {
   position: fixed;
@@ -956,6 +1001,21 @@ html, body {
     max-width: 160px; /* Größer für bessere Sichtbarkeit */
   }
   
+  .club-logo-display {
+    bottom: 15px;
+    left: 15px;
+  }
+  
+  .club-logo-container {
+    padding: 0;
+  }
+  
+  .club-logo {
+    max-height: 120px;
+    max-width: 120px;
+    opacity: 0.7;
+  }
+  
   .player-goal-display {
     bottom: 15px;
     left: 15px;
@@ -1030,6 +1090,21 @@ html, body {
     max-width: 140px; /* Größer für bessere Sichtbarkeit */
   }
   
+  .club-logo-display {
+    bottom: 10px;
+    left: 10px;
+  }
+  
+  .club-logo-container {
+    padding: 0;
+  }
+  
+  .club-logo {
+    max-height: 110px;
+    max-width: 110px;
+    opacity: 0.7;
+  }
+  
   .player-goal-display {
     bottom: 10px;
     left: 10px;
@@ -1102,6 +1177,21 @@ html, body {
   
   .sponsor-label {
     font-size: 8px; /* Noch kleiner für mehr Logo-Platz */
+  }
+  
+  .club-logo-display {
+    bottom: 5px;
+    left: 5px;
+  }
+  
+  .club-logo-container {
+    padding: 0;
+  }
+  
+  .club-logo {
+    max-height: 100px;
+    max-width: 100px;
+    opacity: 0.7;
   }
   
   .player-goal-display {

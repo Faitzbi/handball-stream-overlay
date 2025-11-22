@@ -124,10 +124,27 @@
       transition: all 0.3s ease;
     }
 
-    .form-group input[type="text"]:focus {
+    .form-group input[type="text"]:focus,
+    .form-group select:focus {
       outline: none;
       border-color: var(--primary);
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+
+    .form-group select {
+      width: 100%;
+      padding: 0.875rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--background);
+      color: var(--text-primary);
+      font-size: 1rem;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .form-group select:hover {
+      border-color: var(--primary);
     }
 
     .form-group small {
@@ -315,6 +332,17 @@
           <div class="code-block" id="overlayLink">http://localhost:3000/overlay</div>
           <small>Diesen Link als Browser Source in OBS verwenden.</small>
         </div>
+      </div>
+
+      <div class="form-group">
+        <label for="teamType">
+          <i class="fas fa-users"></i> Team-Typ
+        </label>
+        <select id="teamType">
+          <option value="herren1">Herren 1</option>
+          <option value="damen1">Damen 1</option>
+        </select>
+        <small>Wähle zwischen Herren 1 und Damen 1 Team.</small>
       </div>
 
       <div class="form-grid">

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="de">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,8 +8,10 @@
   <link rel="stylesheet" href="/public/overlay.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet">
 </head>
+
 <body>
   <!-- Haupt-Overlay Container -->
   <div class="overlay-container">
@@ -73,12 +76,21 @@
       </div>
     </div>
 
-    <!-- Sponsor-Display (unten links) -->
+    <!-- Sponsor-Display (unten rechts) -->
     <div class="sponsor-display">
       <div class="sponsor-container">
         <div class="sponsor-label">Präsentiert von</div>
         <div class="sponsor-logo-container">
           <img id="sponsor-logo" class="sponsor-logo" alt="Sponsor Logo" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Vereinslogo-Display (unten links, nur bei damen1) -->
+    <div id="club-logo-display" class="club-logo-display hidden">
+      <div class="club-logo-container">
+        <div class="club-logo-wrapper">
+          <img id="club-logo" class="club-logo" alt="Vereinslogo" />
         </div>
       </div>
     </div>
@@ -107,4 +119,5 @@
 
   <script src="/public/overlay.js"></script>
 </body>
+
 </html>
