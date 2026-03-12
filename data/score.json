@@ -1,13 +1,14 @@
 {
-  "homeTeam": "HG Owschlag-Kropp-Tetenhusen",
-  "awayTeam": "HG Owschlag-Kropp-Tetenhusen 2",
-  "homeGoals": 0,
-  "awayGoals": 0,
+  "homeTeam": "TuS Kirn",
+  "awayTeam": "TSG 1846 Mainz-Bretzenheim",
+  "homeGoals": 20,
+  "awayGoals": 30,
   "period": "Spiel beendet",
-  "lastScorer": "",
-  "lastEvent": "00:00 - Spiel noch nicht gestartet",
-  "gameStatus": "Vorbereitung",
-  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
-  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
-  "lastSourceStamp": 0
+  "lastScorer": "Lea Krauß",
+  "lastEvent": "60:00 - Erneut senden mit Pins Heim/Gast/SRA",
+  "lastEventType": "StopPeriod",
+  "gameStatus": "Beendet",
+  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/1383a2ed-3605-4b0b-b686-eace1fdac3e0.png",
+  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/13f1e43d-b000-4b72-a8c9-49837c73a142.png",
+  "lastSourceStamp": 1773257062001
 }

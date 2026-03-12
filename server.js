@@ -64,6 +64,15 @@ function extractGameTime(timeStr) {
   return 0;
 }
 
+// Prüft, ob ein Event den Spielbeginn oder die Fortsetzung (z. B. nach Halbzeit) anzeigt (API: StartPeriod o. ä.)
+function eventIndicatesGameStartOrResume(ev) {
+  if (!ev) return false;
+  const type = (ev.type || ev.eventType || '').trim().toLowerCase();
+  const msg = (ev.message || '').trim().toLowerCase();
+  if (type === 'startperiod' || type === 'resume') return true;
+  return /spiel\s+gestartet|anpfiff|spielbeginn|spiel\s+läuft\s+weiter|auszeit\s+beendet|halbzeit\s+beendet|zweite\s+halbzeit\s+gestartet/.test(msg);
+}
+
 // Score regression protection
 function protectScoreRegression(newScore, currentScore, isGameSwitch) {
   if (isGameSwitch) return newScore; // Allow reset on game switch
@@ -110,7 +119,7 @@ function detectGameSwitch(newData, currentData) {
 
 // Deep diff for atomic writes
 function hasRealChanges(newData, currentData) {
-  const fields = ['homeTeam', 'awayTeam', 'homeGoals', 'awayGoals', 'period', 'lastScorer', 'lastEvent', 'gameStatus', 'homeLogoUrl', 'awayLogoUrl'];
+  const fields = ['homeTeam', 'awayTeam', 'homeGoals', 'awayGoals', 'period', 'lastScorer', 'lastEvent', 'lastEventType', 'gameStatus', 'homeLogoUrl', 'awayLogoUrl'];
   return fields.some(field => newData[field] !== currentData[field]);
 }
 
@@ -152,6 +161,18 @@ function buildCanonicalEventFromStructured(time, type, playerName, teamName) {
   } else if (t === '7m_missed' || t === '7m-verw' || t === '7m-verschossen') {
     const who = player && team ? `${player}/${team}` : (player || team);
     base = `${mmss} - 7-Meter verworfen (${who})`;
+  } else if (t === 'warning') {
+    base = player && team ? `${mmss} - ${player} (${team}) wurde verwarnt` : team ? `${mmss} - Verwarnung ${team}` : `${mmss} - Verwarnung`;
+  } else if (t === 'twominutepenalty' || t === 'twominute') {
+    base = player && team ? `${mmss} - ${player} (${team}) erhält eine 2-Minuten Strafe` : `${mmss} - 2-Minuten Strafe`;
+  } else if (t === 'disqualification') {
+    base = player && team ? `${mmss} - ${player} (${team}) wurde disqualifiziert` : team ? `${mmss} - Disqualifikation ${team}` : `${mmss} - Disqualifikation`;
+  } else if (t === 'bluecard') {
+    base = player && team ? `${mmss} - Blaue Karte für ${player} (${team})` : team ? `${mmss} - Blaue Karte ${team}` : `${mmss} - Blaue Karte`;
+  } else if (t === 'startperiod') {
+    base = `${mmss} - Spiel gestartet`;
+  } else if (t === 'resume') {
+    base = `${mmss} - Spiel läuft weiter`;
   } else {
     base = `${mmss} - ${t}`;
   }
@@ -233,7 +254,29 @@ function buildCanonicalEventFromHtml(timeText, iconAlt, rawEventText, homeTeam, 
   if (DEBUG && raw && built && !built.toLowerCase().includes(raw.toLowerCase())) {
     dbg('EVENT_CANONICALIZED', { before: `${mmss} - ${raw}`.slice(0, 140), after: built.slice(0, 140) });
   }
-  return { event: built, scorer: player };
+  return { event: built, scorer: player, eventType: canonicalType };
+}
+
+// Vom Overlay unterstützte Event-Typen (getEventHeadline in overlay.js). Andere API-Typen (z. B. StartPeriod, Resume) werden nicht übernommen.
+const OVERLAY_EVENT_TYPES = new Set(['Goal', 'SevenMeterGoal', 'Warning', 'TwoMinutePenalty', 'Disqualification', 'BlueCard']);
+
+function toOverlayEventType(raw) {
+  if (raw == null || typeof raw !== 'string') return '';
+  const t = raw.trim();
+  return OVERLAY_EVENT_TYPES.has(t) ? t : '';
+}
+
+// Map HTML parser canonical type (goal, 7m_goal, 2min, alt text, etc.) to API lastEventType for overlay
+function mapHtmlCanonicalTypeToApiEventType(canonicalType) {
+  const t = (canonicalType || '').toString().trim().toLowerCase();
+  if (t === 'goal' || t === 'tor') return 'Goal';
+  if (t === '7m_goal' || t === '7m-tor' || t === '7m-treffer') return 'SevenMeterGoal';
+  if (t === '2min' || t === '2-min' || t === 'penalty' || t === 'timepenalty') return 'TwoMinutePenalty';
+  if (t === 'timeout') return '';
+  if (/verwarnung|gelb|warning|gelbe\s*karte/i.test(t)) return 'Warning';
+  if (/disqualif|rot|rote\s*karte|red\s*card/i.test(t)) return 'Disqualification';
+  if (/blau|blue\s*card|blaue\s*karte/i.test(t)) return 'BlueCard';
+  return '';
 }
 
 // Valid-Packet Gate
@@ -603,7 +646,177 @@ app.get('/api/logos', (req, res) => {
   }
 });
 
-app.get('/api/score', (req, res) => res.json(readJSON(SCORE_FILE, {})));
+// Test-Event für Overlay (manuell aus Admin auslösbar, einmalig an nächsten Poll)
+let pendingTestEvent = null;
+// Auszeit-Popup: einmalig an nächsten /api/score-Abruf anhängen, dann zurücksetzen
+let pendingTimeoutPopup = null;
+// Halbzeit-Popup: einmalig bei StopPeriod-Event (oder Admin-Test)
+let pendingHalftimePopup = null;
+
+app.post('/api/admin/test-event', (req, res) => {
+  const { eventType, message, playerName } = req.body || {};
+  pendingTestEvent = {
+    eventType: (eventType || 'Goal').trim(),
+    message: (message || '').trim(),
+    playerName: (playerName || '').trim()
+  };
+  res.json({ ok: true, pending: pendingTestEvent });
+});
+
+app.post('/api/admin/test-timeout-popup', async (req, res) => {
+  const score = readJSON(SCORE_FILE, {});
+  const config = readJSON(CONFIG_FILE, {});
+  const team = (req.body && req.body.team) === 'Away' ? 'Away' : 'Home';
+  const tickerUrl = (config.tickerUrl || '').trim();
+  const top3FromLineup = (arr) => (Array.isArray(arr) ? arr : [])
+    .slice()
+    .sort((a, b) => ((b.goals || 0) + (b.penaltyGoals || 0)) - ((a.goals || 0) + (a.penaltyGoals || 0)))
+    .slice(0, 3)
+    .map(p => ({
+      name: [p.firstname, p.lastname].filter(Boolean).join(' ').trim() || '–',
+      goals: (p.goals || 0) + (p.penaltyGoals || 0),
+      number: p.number != null ? p.number : ''
+    }));
+
+  let last5Events = [];
+  let top3Home = [];
+  let top3Away = [];
+
+  const combinedUrl = deriveCombinedApiUrl(tickerUrl);
+  if (combinedUrl) {
+    try {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/html, */*',
+        'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
+        'Referer': 'https://www.handball.net/'
+      };
+      const resFetch = await fetch(combinedUrl, { headers, cache: 'no-store' });
+      if (resFetch.ok) {
+        const ct = (resFetch.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('application/json')) {
+          const json = await resFetch.json();
+          const events = json.data?.events || [];
+          const lineup = json.data?.lineup || {};
+          last5Events = events.slice(0, 5).map(e => ({
+            time: (e.time || e.gameTime || '').toString().trim(),
+            message: (e.message || '').toString().trim()
+          }));
+          top3Home = top3FromLineup(lineup.home);
+          top3Away = top3FromLineup(lineup.away);
+        }
+      }
+    } catch (err) {
+      console.warn('[test-timeout-popup] Combined-API-Fetch fehlgeschlagen:', err.message);
+    }
+  }
+
+  if (last5Events.length === 0 && score.lastEvent) {
+    const timeMatch = (score.lastEvent || '').match(/^(\d{1,2}:\d{2})/);
+    last5Events = [{ time: timeMatch ? timeMatch[1] : '–', message: score.lastEvent.replace(/^\d{1,2}:\d{2}\s*-\s*/, '').trim() }];
+  }
+  if (last5Events.length === 0) {
+    last5Events = [{ time: '–', message: 'Auszeit ' + (team === 'Home' ? (score.homeTeam || 'Heim') : (score.awayTeam || 'Gast')) }];
+  }
+
+  pendingTimeoutPopup = {
+    team,
+    teamLogoUrl: team === 'Away' ? (score.awayLogoUrl || '') : (score.homeLogoUrl || ''),
+    homeLogoUrl: score.homeLogoUrl || '',
+    awayLogoUrl: score.awayLogoUrl || '',
+    last5Events,
+    top3Home: top3Home.length ? top3Home : [{ name: '–', goals: 0, number: '' }, { name: '–', goals: 0, number: '' }, { name: '–', goals: 0, number: '' }],
+    top3Away: top3Away.length ? top3Away : [{ name: '–', goals: 0, number: '' }, { name: '–', goals: 0, number: '' }, { name: '–', goals: 0, number: '' }]
+  };
+  res.json({ ok: true, message: 'Auszeit-Popup mit aktuellem Spielstand beim nächsten Overlay-Poll anzeigen.' });
+});
+
+app.post('/api/admin/test-halftime-popup', async (req, res) => {
+  const config = readJSON(CONFIG_FILE, {});
+  const score = readJSON(SCORE_FILE, {});
+  const tickerUrl = (config.tickerUrl || '').trim();
+  const combinedUrl = deriveCombinedApiUrl(tickerUrl);
+  let homePlayers = [];
+  let awayPlayers = [];
+  let title = 'Halbzeit';
+  let homeTeam = score.homeTeam || 'Heim';
+  let awayTeam = score.awayTeam || 'Gast';
+  let homeLogoUrl = score.homeLogoUrl || '';
+  let awayLogoUrl = score.awayLogoUrl || '';
+
+  if (combinedUrl) {
+    try {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/html, */*',
+        'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
+        'Referer': 'https://www.handball.net/'
+      };
+      const resFetch = await fetch(combinedUrl, { headers, cache: 'no-store' });
+      if (resFetch.ok) {
+        const ct = (resFetch.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('application/json')) {
+          const json = await resFetch.json();
+          const lineup = json.data?.lineup || {};
+          const summary = json.data?.summary || {};
+          const homeLineup = Array.isArray(lineup.home) ? lineup.home : [];
+          const awayLineup = Array.isArray(lineup.away) ? lineup.away : [];
+          if (summary.homeTeam && summary.homeTeam.name) homeTeam = summary.homeTeam.name;
+          if (summary.awayTeam && summary.awayTeam.name) awayTeam = summary.awayTeam.name;
+          if (summary.homeTeam && summary.homeTeam.logo) homeLogoUrl = normalizeLogoUrl(summary.homeTeam.logo);
+          if (summary.awayTeam && summary.awayTeam.logo) awayLogoUrl = normalizeLogoUrl(summary.awayTeam.logo);
+          const toPlayerRow = (p) => ({
+            number: p.number != null ? p.number : '',
+            name: [p.firstname, p.lastname].filter(Boolean).join(' ').trim() || '–',
+            goals: (p.goals || 0) + (p.penaltyGoals || 0),
+            yellowCards: p.yellowCards || 0,
+            timePenalties: (p.timePenalties != null ? p.timePenalties : (p.penalties != null ? p.penalties : 0)),
+            redCards: p.redCards || 0,
+            blueCards: p.blueCards || 0
+          });
+          const sortByNumber = (arr) => arr.slice().sort((a, b) => (a.number != null ? a.number : 0) - (b.number != null ? b.number : 0));
+          homePlayers = sortByNumber(homeLineup).map(toPlayerRow);
+          awayPlayers = sortByNumber(awayLineup).map(toPlayerRow);
+        }
+      }
+    } catch (err) {
+      console.warn('[test-halftime-popup] Combined-API-Fetch fehlgeschlagen:', err.message);
+    }
+  }
+
+  pendingHalftimePopup = {
+    title,
+    homeTeam,
+    awayTeam,
+    homeLogoUrl,
+    awayLogoUrl,
+    homePlayers,
+    awayPlayers,
+    isTest: true
+  };
+  res.json({ ok: true, message: 'Halbzeit-Popup beim nächsten Overlay-Poll anzeigen (max. 30 Sekunden im Test).' });
+});
+
+app.get('/api/score', (req, res) => {
+  const score = readJSON(SCORE_FILE, {});
+  if (pendingTestEvent) {
+    score._testEvent = pendingTestEvent;
+    pendingTestEvent = null;
+  }
+  if (pendingTimeoutPopup) {
+    score._timeoutPopup = pendingTimeoutPopup;
+    pendingTimeoutPopup = null;
+  }
+  if (pendingHalftimePopup) {
+    score._halftimePopup = pendingHalftimePopup;
+    pendingHalftimePopup = null;
+  }
+  const config = readJSON(CONFIG_FILE, {});
+  if (config.ourTeamName && typeof config.ourTeamName === 'string') {
+    score.ourTeamName = config.ourTeamName.trim();
+  }
+  res.json(score);
+});
 
 app.get('/api/club-logo', (req, res) => {
   try {
@@ -649,10 +862,86 @@ app.post('/api/config', (req, res) => {
 app.get('/overlay', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'overlay.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 
+// Spielplan: nächste 3 noch nicht beendeten Spiele aus scheduleUrl
+const HANDBALL_NET_ORIGIN = 'https://www.handball.net';
+const SCHEDULE_PATH_REGEX = /\/mannschaften\/[^/]+\/spielplan/i;
+function isValidScheduleUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  try {
+    const u = new URL(url.trim());
+    if (u.origin !== HANDBALL_NET_ORIGIN) return false;
+    return SCHEDULE_PATH_REGEX.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+app.get('/api/schedule/upcoming', async (req, res) => {
+  const config = readJSON(CONFIG_FILE, {});
+  const scheduleUrl = (config.scheduleUrl || '').trim();
+  if (!scheduleUrl) {
+    return res.status(400).json({ error: 'Kein Spielplan-Link gespeichert. Bitte zuerst Spielplan-Link eintragen und Konfiguration speichern.' });
+  }
+  if (!isValidScheduleUrl(scheduleUrl)) {
+    return res.status(400).json({ error: 'Ungültiger Spielplan-Link. Nur handball.net-Mannschafts-Spielplan-URLs sind erlaubt.' });
+  }
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
+    'Referer': 'https://www.handball.net/',
+    'Cache-Control': 'no-cache',
+  };
+  let html;
+  try {
+    const response = await fetch(scheduleUrl, { headers, cache: 'no-store' });
+    if (!response.ok) {
+      return res.status(502).json({ error: `Spielplan-Seite nicht erreichbar (HTTP ${response.status}).` });
+    }
+    html = await response.text();
+  } catch (err) {
+    console.error('[schedule] Fetch failed:', err.message);
+    return res.status(502).json({ error: 'Spielplan-Seite konnte nicht geladen werden: ' + (err.message || 'Netzwerkfehler') });
+  }
+  const $ = cheerio.load(html);
+  const gameIdRegex = /\/spiele\/([^/]+)\/info/i;
+  const seen = new Set();
+  const upcoming = [];
+  $('a[href*="/spiele/"]').each((_, el) => {
+    const href = ($(el).attr('href') || '').trim();
+    const match = href.match(gameIdRegex);
+    if (!match) return;
+    const gameId = match[1];
+    if (seen.has(gameId)) return;
+    seen.add(gameId);
+    const text = $(el).text().replace(/\s+/g, ' ').trim();
+    const label = text || `Spiel ${gameId}`;
+    upcoming.push({
+      gameId,
+      label,
+      dateTime: null,
+      tickerUrl: `${HANDBALL_NET_ORIGIN}/spiele/${gameId}/ticker`,
+    });
+  });
+  return res.json(upcoming.slice(0, 3));
+});
+
 let fetchTimer = null;
 async function resolveAbsolute(base, src) { try { return new URL(src, base).href; } catch { return src; } }
 
 /* ===== JSON ("combined") bevorzugen – Fallback: HTML ===== */
+
+// Option B: Ticker-Seiten-URL → combined-API-URL ableiten
+// /spiele/{gameId}/ticker → /a/sportdata/1/games/{gameId}/combined (ohne ?)
+function deriveCombinedApiUrl(tickerUrl) {
+  if (!tickerUrl || typeof tickerUrl !== 'string') return null;
+  const trimmed = tickerUrl.trim();
+  const match = trimmed.match(/^(https?:\/\/[^/]+)\/spiele\/([^/]+)\/ticker\/?(\?.*)?$/i);
+  if (!match) return null;
+  const base = match[1];
+  const gameId = match[2];
+  return `${base}/a/sportdata/1/games/${gameId}/combined`;
+}
 
 // Hilfsfunktionen
 function normalizeLogoUrl(raw) {
@@ -693,23 +982,48 @@ function parseCombinedJSON(json, currentScore) {
   const homeGoals = (typeof sum.homeGoals === 'number') ? sum.homeGoals : (currentScore.homeGoals | 0);
   const awayGoals = (typeof sum.awayGoals === 'number') ? sum.awayGoals : (currentScore.awayGoals | 0);
 
-  // Uhr/Phase aus Events extrahieren (neuestes Event hat die aktuelle Zeit)
-  let clock = currentScore.clock || '00:00';
+  // period und gameStatus aus summary.state (API: "Post", "Live", "Pre")
+  const state = (sum.state || '').trim();
   let period = currentScore.period || '';
+  let gameStatus = 'Live';
+  if (state === 'Post') {
+    period = 'Spiel beendet';
+    gameStatus = 'Beendet';
+  } else if (state === 'Live') {
+    period = 'Jetzt Live!';
+    gameStatus = 'Live';
+  } else if (state === 'Pre') {
+    period = 'Vorbereitung';
+    gameStatus = 'Vorbereitung';
+  }
+  if (!period) period = currentScore.period || '';
 
-  // Events-Zeit-Extraktion entfernt (events nicht verfügbar)
-
-  // Debug-Logging
-  console.log(`[debug] Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Period: ${period}`);
-
-  // letzter Torschütze und Ereignis: nimm das neueste Event
+  // letzter Torschütze und Ereignis: nimm das neueste Event aus der API
   let lastScorer = '';
   let lastEvent = '';
-  let gameStatus = 'Live';
+  const events = Array.isArray(data.events) ? data.events : [];
+  const newestEvent = selectNewestEvent(events);
+  if (newestEvent) {
+    const eventTime = (newestEvent.gameTime || newestEvent.time || '').toString().trim();
+    if (newestEvent.message && newestEvent.message.trim() !== '') {
+      lastEvent = (eventTime ? eventTime + ' - ' : '') + newestEvent.message.trim();
+      const eventType = (newestEvent.type || newestEvent.eventType || '').trim();
+      if (eventType === 'Goal' || eventType === 'SevenMeterGoal') {
+        lastScorer = playerFromMessage(newestEvent.message) || lastScorer;
+      }
+    } else {
+      const eventType = (newestEvent.type || newestEvent.eventType || '').trim();
+      const playerName = newestEvent.playerName || newestEvent.player || playerFromMessage(newestEvent.message || '') || '';
+      const teamRaw = newestEvent.teamName || newestEvent.team || '';
+      const teamName = teamRaw === 'Home' ? homeTeam : teamRaw === 'Away' ? awayTeam : teamRaw;
+      lastEvent = buildCanonicalEventFromStructured(eventTime, eventType, playerName, teamName);
+      if (eventType === 'Goal' || eventType === 'SevenMeterGoal') {
+        lastScorer = playerName || lastScorer;
+      }
+    }
+  }
 
-  // Events-basierte Tor-Erkennung entfernt (events nicht verfügbar)
-
-  // Spiel-Status bestimmen - verbesserte Erkennung
+  // Fallback: Spiel-Status aus period-Text
   if (period.includes('beendet') || period.includes('Spiel beendet')) {
     gameStatus = 'Beendet';
   } else if (period.includes('Pause') || period.includes('Halbzeit') ||
@@ -720,6 +1034,9 @@ function parseCombinedJSON(json, currentScore) {
     gameStatus = 'Live';
   }
 
+  // Debug-Logging
+  console.log(`[debug] Parsed: ${homeTeam} vs ${awayTeam}, Score: ${homeGoals}:${awayGoals}, Period: ${period}`);
+
   // Zusätzliche Halbzeit-Erkennung aus Events entfernt
 
   // Team-Logos
@@ -728,7 +1045,7 @@ function parseCombinedJSON(json, currentScore) {
 
   console.log(`[debug] Logos: Home=${homeLogoUrl}, Away=${awayLogoUrl}`);
 
-  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl, eventsCount: allEvents.length };
+  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl, eventsCount: (json?.data?.events || []).length };
 }
 
 // HTML-Parser für handball.net Ticker-Seite
@@ -1042,6 +1359,7 @@ async function parseTickerHTML(html, baseUrl) {
   // Letzter Torschütze und Ereignis - Verwende die bereits erkannten Events
   let lastScorer = '';
   let lastEvent = '';
+  let lastEventType = '';
   let gameStatus = 'Live';
 
   // Die Events werden bereits in der parseTickerHTML Funktion erkannt
@@ -1124,6 +1442,7 @@ async function parseTickerHTML(html, baseUrl) {
       const built = buildCanonicalEventFromHtml(timeText, iconAlt, eventText, homeTeam, awayTeam);
       const detailedEvent = built.event;
       if (built.scorer) lastScorer = built.scorer;
+      lastEventType = mapHtmlCanonicalTypeToApiEventType(built.eventType) || '';
 
       // Event wird sofort gesetzt - keine Stabilisierung nötig
       lastEvent = detailedEvent;
@@ -1174,6 +1493,7 @@ async function parseTickerHTML(html, baseUrl) {
     awayGoals = 0;
     lastScorer = '';
     lastEvent = '00:00 - Spiel noch nicht gestartet';
+    lastEventType = '';
     gameStatus = 'Vorbereitung';
   }
 
@@ -1208,7 +1528,7 @@ async function parseTickerHTML(html, baseUrl) {
   }
 
 
-  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, gameStatus, homeLogoUrl, awayLogoUrl };
+  return { homeTeam, awayTeam, homeGoals, awayGoals, period, lastScorer, lastEvent, lastEventType, gameStatus, homeLogoUrl, awayLogoUrl };
 }
 
 // Eine Sekunde Polling – erkennt JSON automatisch
@@ -1259,6 +1579,7 @@ async function fetchOnce() {
         period: currentScore.period || '',
         lastScorer: '',
         lastEvent: '00:00 - Spiel noch nicht gestartet',
+        lastEventType: '',
         gameStatus: 'Vorbereitung',
         homeLogoUrl: currentScore.homeLogoUrl || '',
         awayLogoUrl: currentScore.awayLogoUrl || '',
@@ -1271,10 +1592,14 @@ async function fetchOnce() {
       return;
     }
 
+    // Option B: Ticker-Seiten-URL → combined-API-URL ableiten; sonst tickerUrl verwenden
+    const derivedApiUrl = deriveCombinedApiUrl(tickerUrl);
+    const urlToFetch = derivedApiUrl || tickerUrl;
+
     // Header vorbereiten für handball.net
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7,application/json;q=0.9',
       'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
       'Accept-Encoding': 'gzip, deflate, br',
       'Cache-Control': 'no-cache',
@@ -1289,44 +1614,75 @@ async function fetchOnce() {
 
     // Cache-Busting: Add timestamp to prevent caching
     const cacheBuster = `?_=${Date.now()}`;
-    const urlWithCacheBuster = tickerUrl.includes('?') ? `${tickerUrl}&_=${Date.now()}` : `${tickerUrl}${cacheBuster}`;
+    const urlWithCacheBuster = urlToFetch.includes('?') ? `${urlToFetch}&_=${Date.now()}` : `${urlToFetch}${cacheBuster}`;
+    const tickerUrlWithCacheBuster = tickerUrl.includes('?') ? `${tickerUrl}&_=${Date.now()}` : `${tickerUrl}${cacheBuster}`;
 
-    const fetchStartTime = Date.now();
-    const res = await fetch(urlWithCacheBuster, {
-      headers,
-      cache: 'no-store' // Disable caching
-    });
-    const fetchEndTime = Date.now();
-    const fetchLatency = fetchEndTime - fetchStartTime;
+    let res;
+    try {
+      const fetchStartTime = Date.now();
+      res = await fetch(urlWithCacheBuster, {
+        headers,
+        cache: 'no-store' // Disable caching
+      });
+      const fetchEndTime = Date.now();
+      const fetchLatency = fetchEndTime - fetchStartTime;
+
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      const isApiLike = /\/api\//.test(urlToFetch) || /combined/.test(urlToFetch);
+      const pathType = isApiLike ? 'JSON' : 'HTML';
+
+      dbg('REQUEST_DETAILS', {
+        reqId,
+        path: pathType,
+        url: urlToFetch,
+        derived: !!derivedApiUrl,
+        isApiLike,
+        contentType: ct,
+        latency: fetchLatency,
+        startTime: new Date(fetchStartTime).toISOString(),
+        endTime: new Date(fetchEndTime).toISOString(),
+        status: res.status,
+        statusText: res.statusText
+      });
+
+      // Single-source guarantee: wenn Nutzer explizit API-URL gesetzt hat und Antwort kein JSON ist → skip
+      // Bei abgeleiteter URL (Option B): bei Nicht-JSON auf Ticker-Seite ausweichen (Fallback)
+      if (isApiLike && !ct.includes('application/json')) {
+        if (derivedApiUrl) {
+          dbg('API_FALLBACK_HTML', { reqId, reason: 'derived API returned non-JSON, fetching ticker page' });
+          const res2 = await fetch(tickerUrlWithCacheBuster, { headers, cache: 'no-store' });
+          const html = await res2.text();
+          // HTML-Pfad unten mit diesem html ausführen (siehe "***** HTML-Parsing als Fallback *****")
+          res = { text: () => Promise.resolve(html), headers: res2.headers, status: res2.status, statusText: res2.statusText, ok: res2.ok };
+        } else {
+          dbg('SINGLE_SOURCE_SKIP', {
+            reqId,
+            reason: 'API-like URL but non-JSON content-type',
+            url: tickerUrl,
+            contentType: ct,
+            isApiLike
+          });
+          return;
+        }
+      }
+    } catch (fetchErr) {
+      if (derivedApiUrl) {
+        dbg('API_FALLBACK_HTML', { reqId, reason: 'derived API fetch failed', error: fetchErr.message });
+        try {
+          res = await fetch(tickerUrlWithCacheBuster, { headers, cache: 'no-store' });
+          const html = await res.text();
+          res = { text: () => Promise.resolve(html), headers: res.headers, status: res.status, statusText: res.statusText, ok: res.ok };
+        } catch (fallbackErr) {
+          console.error('[ticker] Fetch failed (API and fallback):', fetchErr.message, fallbackErr.message);
+          throw fallbackErr;
+        }
+      } else {
+        throw fetchErr;
+      }
+    }
 
     const ct = (res.headers.get('content-type') || '').toLowerCase();
-    const isApiLike = /\/api\//.test(tickerUrl) || /combined/.test(tickerUrl);
-    const pathType = isApiLike ? 'JSON' : 'HTML';
-
-    dbg('REQUEST_DETAILS', {
-      reqId,
-      path: pathType,
-      url: tickerUrl,
-      isApiLike,
-      contentType: ct,
-      latency: fetchLatency,
-      startTime: new Date(fetchStartTime).toISOString(),
-      endTime: new Date(fetchEndTime).toISOString(),
-      status: res.status,
-      statusText: res.statusText
-    });
-
-    // Single-source guarantee: if URL looks API-like but content-type != application/json -> skip
-    if (isApiLike && !ct.includes('application/json')) {
-      dbg('SINGLE_SOURCE_SKIP', {
-        reqId,
-        reason: 'API-like URL but non-JSON content-type',
-        url: tickerUrl,
-        contentType: ct,
-        isApiLike
-      });
-      return;
-    }
+    const isApiLike = /\/api\//.test(urlToFetch) || /combined/.test(urlToFetch);
 
     // ***** JSON-API versuchen (falls verfügbar) *****
     if (isApiLike && ct.includes('application/json')) {
@@ -1410,24 +1766,52 @@ async function fetchOnce() {
       // Event monotonicity: only update if newer
       let finalEvent = currentScore.lastEvent || '';
       let finalScorer = currentScore.lastScorer || '';
+      let finalEventType = currentScore.lastEventType || '';
+
+      // Wenn das neueste Event Spielstart/Fortsetzung anzeigt (StartPeriod, „Spiel gestartet“ etc.), Status auf Live setzen
+      let eventIndicatesLive = newestEvent && eventIndicatesGameStartOrResume(newestEvent);
 
       if (newestEvent) {
         const newEventTime = extractGameTime(newestEvent.gameTime || newestEvent.time || '');
         const currentEventTime = extractGameTime(currentScore.lastEvent || '');
         if (newEventTime >= currentEventTime) {
-          const eventTime = newestEvent.gameTime || newestEvent.time || '';
-          const eventType = newestEvent.type || newestEvent.eventType || '';
-          const playerName = newestEvent.playerName || newestEvent.player || '';
-          const teamName = newestEvent.teamName || newestEvent.team || '';
-          // If score is 0:0 or status indicates pregame, override with pregame default
           const predictedHome = protectedScore.homeGoals;
           const predictedAway = protectedScore.awayGoals;
-          if (predictedHome === 0 && predictedAway === 0) {
+          const isScoreZero = predictedHome === 0 && predictedAway === 0;
+          // Bei 0:0 nur dann „Spiel noch nicht gestartet“ setzen, wenn kein Start-Event vorliegt (ansonsten Event anzeigen → Live)
+          if (isScoreZero && !eventIndicatesLive && !(newestEvent.message && newestEvent.message.trim() !== '')) {
             finalEvent = '00:00 - Spiel noch nicht gestartet';
             finalScorer = '';
-          } else {
+            finalEventType = '';
+          } else if (newestEvent.message && newestEvent.message.trim() !== '') {
+            // API message 1:1 anzeigen (Zeit + Original-Message)
+            const eventTime = (newestEvent.gameTime || newestEvent.time || '').trim();
+            finalEvent = (eventTime ? eventTime + ' - ' : '') + newestEvent.message.trim();
+            const eventType = (newestEvent.type || newestEvent.eventType || '').trim();
+            finalEventType = toOverlayEventType(eventType);
+            if (eventType === 'Goal' || eventType === 'SevenMeterGoal') {
+              finalScorer = playerFromMessage(newestEvent.message) || finalScorer;
+            }
+            // Bei anderen Eventtypen (2-Min, Auszeit, etc.) lastScorer unverändert lassen
+          } else if (isScoreZero && eventIndicatesLive) {
+            // StartPeriod/Resume ohne message: lesbaren Text bauen
+            const eventTime = (newestEvent.gameTime || newestEvent.time || '00:00').trim();
+            finalEvent = eventTime + ' - Spiel gestartet';
+            finalEventType = ''; // StartPeriod/Resume etc. sind im Overlay nicht als Event-Typ vorgesehen
+          } else if (!isScoreZero || (newestEvent.type || newestEvent.eventType)) {
+            // Fallback wenn message fehlt: aus type + team bauen (team "Home"/"Away" zu Teamnamen auflösen)
+            const eventTime = (newestEvent.gameTime || newestEvent.time || '').trim();
+            const eventType = (newestEvent.type || newestEvent.eventType || '').trim();
+            const playerName = newestEvent.playerName || newestEvent.player || playerFromMessage(newestEvent.message || '');
+            const teamRaw = newestEvent.teamName || newestEvent.team || '';
+            const teamName = teamRaw === 'Home' ? (parsed.homeTeam || 'Heim') : teamRaw === 'Away' ? (parsed.awayTeam || 'Gast') : teamRaw;
             finalEvent = buildCanonicalEventFromStructured(eventTime, eventType, playerName, teamName);
-            finalScorer = playerName || finalScorer;
+            finalEventType = toOverlayEventType(eventType);
+            if (eventType === 'Goal' || eventType === 'SevenMeterGoal') finalScorer = playerName || finalScorer;
+          } else {
+            finalEvent = '00:00 - Spiel noch nicht gestartet';
+            finalScorer = '';
+            finalEventType = '';
           }
         } else if (DEBUG) {
           dbg('STALE_EVENT_IGNORED', {
@@ -1448,17 +1832,26 @@ async function fetchOnce() {
         period: parsed.period || currentScore.period || '',
         lastScorer: finalScorer,
         lastEvent: finalEvent,
+        lastEventType: finalEventType,
         gameStatus: parsed.gameStatus || currentScore.gameStatus || 'Live',
         homeLogoUrl: parsed.homeLogoUrl || currentScore.homeLogoUrl || '',
         awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
         lastSourceStamp: sourceStamp
       };
 
-      // If clearly pregame (no events, score 0:0, non-live), enforce default lastEvent
-      if (newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0) {
+      // Spielstart/Fortsetzung: Status auf Live setzen, auch wenn API noch „Pre“ meldet
+      if (eventIndicatesLive) {
+        newScoreData.gameStatus = 'Live';
+        newScoreData.period = 'Jetzt Live!';
+      }
+
+      // Nur bei tatsächlich Vorbereitung (API state Pre) und 0:0 Default-Text setzen; sonst Live-Anzeige nicht überschreiben
+      if (newScoreData.homeGoals === 0 && newScoreData.awayGoals === 0 &&
+          (parsed.gameStatus === 'Vorbereitung' || parsed.gameStatus === 'Pre') && !eventIndicatesLive) {
         newScoreData.gameStatus = 'Vorbereitung';
         newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
         newScoreData.lastScorer = '';
+        newScoreData.lastEventType = '';
       }
 
       // Preserve teams against placeholder downgrade
@@ -1500,6 +1893,64 @@ async function fetchOnce() {
 
       // Atomic write
       writeJSON(SCORE_FILE, newScoreData);
+
+      // Auszeit-Popup: einmaliges Payload für Overlay (nur wenn neuestes Event Timeout)
+      if (newestEvent && (newestEvent.type || newestEvent.eventType) === 'Timeout') {
+        const events = json.data?.events || [];
+        const lineup = json.data?.lineup || {};
+        const homeLineup = Array.isArray(lineup.home) ? lineup.home : [];
+        const awayLineup = Array.isArray(lineup.away) ? lineup.away : [];
+        const top3 = (arr) => arr
+          .slice()
+          .sort((a, b) => ((b.goals || 0) + (b.penaltyGoals || 0)) - ((a.goals || 0) + (a.penaltyGoals || 0)))
+          .slice(0, 3)
+          .map(p => ({
+            name: [p.firstname, p.lastname].filter(Boolean).join(' ').trim() || '–',
+            goals: (p.goals || 0) + (p.penaltyGoals || 0),
+            number: p.number != null ? p.number : ''
+          }));
+        pendingTimeoutPopup = {
+          team: newestEvent.team || 'Home',
+          teamLogoUrl: (newestEvent.team === 'Away' ? parsed.awayLogoUrl : parsed.homeLogoUrl) || '',
+          homeLogoUrl: parsed.homeLogoUrl || '',
+          awayLogoUrl: parsed.awayLogoUrl || '',
+          last5Events: events.slice(0, 5).map(e => ({
+            time: (e.time || e.gameTime || '').toString().trim(),
+            message: (e.message || '').toString().trim()
+          })),
+          top3Home: top3(homeLineup),
+          top3Away: top3(awayLineup)
+        };
+      }
+
+      // Halbzeit-Popup: einmaliges Payload bei StopPeriod (z. B. "Spielstand 1. Halbzeit")
+      const eventType = (newestEvent && (newestEvent.type || newestEvent.eventType)) || '';
+      const isStopPeriod = eventType === 'StopPeriod' || (newestEvent && (newestEvent.message || '').toLowerCase().includes('halbzeit'));
+      if (newestEvent && isStopPeriod) {
+        const lineup = json.data?.lineup || {};
+        const homeLineup = Array.isArray(lineup.home) ? lineup.home : [];
+        const awayLineup = Array.isArray(lineup.away) ? lineup.away : [];
+        const toPlayerRow = (p) => ({
+          number: p.number != null ? p.number : '',
+          name: [p.firstname, p.lastname].filter(Boolean).join(' ').trim() || '–',
+          goals: (p.goals || 0) + (p.penaltyGoals || 0),
+          yellowCards: p.yellowCards || 0,
+          timePenalties: (p.timePenalties != null ? p.timePenalties : (p.penalties != null ? p.penalties : 0)),
+          redCards: p.redCards || 0,
+          blueCards: p.blueCards || 0
+        });
+        const sortByNumber = (arr) => arr.slice().sort((a, b) => (a.number != null ? a.number : 0) - (b.number != null ? b.number : 0));
+        pendingHalftimePopup = {
+          title: (newestEvent.message || 'Halbzeit').trim(),
+          homeTeam: parsed.homeTeam || '',
+          awayTeam: parsed.awayTeam || '',
+          homeLogoUrl: parsed.homeLogoUrl || '',
+          awayLogoUrl: parsed.awayLogoUrl || '',
+          homePlayers: sortByNumber(homeLineup).map(toPlayerRow),
+          awayPlayers: sortByNumber(awayLineup).map(toPlayerRow),
+          isTest: false
+        };
+      }
 
       dbg('WRITE_ACCEPTED', {
         reqId,
@@ -1588,6 +2039,7 @@ async function fetchOnce() {
     // Event monotonicity for HTML
     let finalEvent = currentScore.lastEvent || '';
     let finalScorer = currentScore.lastScorer || '';
+    let finalEventType = currentScore.lastEventType || '';
 
     // Always use the parsed lastEvent if it exists and is not empty
     if (parsed.lastEvent && parsed.lastEvent.trim() !== '') {
@@ -1597,6 +2049,7 @@ async function fetchOnce() {
       if (newEventTime >= currentEventTime) {
         finalEvent = dedupeEventText(parsed.lastEvent);
         finalScorer = parsed.lastScorer || '';
+        finalEventType = toOverlayEventType((parsed.lastEventType && typeof parsed.lastEventType === 'string') ? parsed.lastEventType : '');
       } else if (DEBUG) {
         dbg('STALE_EVENT_IGNORED', { reqId, newEventTime, currentEventTime });
       }
@@ -1606,9 +2059,10 @@ async function fetchOnce() {
     if (protectedScore.homeGoals === 0 && protectedScore.awayGoals === 0) {
       finalEvent = '00:00 - Spiel noch nicht gestartet';
       finalScorer = '';
+      finalEventType = '';
     }
 
-    // Build final data
+    // Build final data (HTML path: lastEventType from parsed event type mapping)
     let newScoreData = {
       homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
       awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
@@ -1617,6 +2071,7 @@ async function fetchOnce() {
       period: parsed.period || currentScore.period || '',
       lastScorer: finalScorer,
       lastEvent: finalEvent,
+      lastEventType: finalEventType,
       gameStatus: parsed.gameStatus || currentScore.gameStatus || 'Live',
       homeLogoUrl: parsed.homeLogoUrl || currentScore.homeLogoUrl || '',
       awayLogoUrl: parsed.awayLogoUrl || currentScore.awayLogoUrl || '',
@@ -1628,6 +2083,7 @@ async function fetchOnce() {
       newScoreData.gameStatus = 'Vorbereitung';
       newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
       newScoreData.lastScorer = '';
+      newScoreData.lastEventType = '';
     }
 
     // Preserve teams against placeholder downgrade

@@ -1,7 +1,13 @@
 function $(s) { return document.querySelector(s); }
 var lastScorerSeen = "";
 var playerDisplayTimeout = null;
+var playerDisplayTimeoutAway = null;
+var timeoutPopupHideTimer = null;
+var timeoutPopupEventKey = "";  // lastEvent|lastEventType beim Anzeigen – Popup schließen bei neuem Event
+var halftimePopupHideTimer = null;
+var halftimePopupEventKey = ""; // Halbzeit-Popup: bei neuem Event schließen
 var stableEventText = "";
+var lastShownEventKey = "";
 
 // Debug helper function for client-side
 var DEBUG = window.location.search.includes('debug=1') || localStorage.getItem('DEBUG') === '1';
@@ -27,6 +33,14 @@ var lastKnownScore = { homeGoals: 0, awayGoals: 0 };
 // Client-seitige Event-Stabilitätsprüfung
 var clientEventStabilityCount = 0;
 var CLIENT_EVENT_STABILITY_THRESHOLD = 1; // Weniger restriktiv
+
+// Prüft, ob ein Event-Pop-up angezeigt werden soll: wenn ourTeamName gesetzt ist, nur wenn das Event unser Team betrifft
+function eventIsForOurTeam(score, eventMessage) {
+  var our = (score.ourTeamName && typeof score.ourTeamName === "string") ? score.ourTeamName.trim() : "";
+  if (!our) return true;
+  var msg = (eventMessage && typeof eventMessage === "string") ? eventMessage : "";
+  return msg.indexOf(our) !== -1;
+}
 
 // Client-seitige Event-Format-Normalisierung
 function normalizeClientEventFormat(event) {
@@ -292,17 +306,11 @@ function showCurrentSponsor() {
   if (!logoEl || !sponsorUrls.length) return;
 
   var currentUrl = sponsorUrls[currentSponsorIndex];
-
-  // Logo ausblenden
   logoEl.classList.remove("show");
   logoEl.classList.add("hide");
-
-  // Nach Animation neues Logo laden
   setTimeout(function () {
     logoEl.src = currentUrl;
     logoEl.alt = "Sponsor Logo";
-
-    // Logo einblenden
     logoEl.classList.remove("hide");
     logoEl.classList.add("show");
   }, 400);
@@ -373,6 +381,42 @@ function refreshScore() {
     .then(function (s) {
       var fetchEndTime = Date.now();
       var fetchLatency = fetchEndTime - fetchStartTime;
+
+      var currentEventKey = (s.lastEvent || "") + "|" + (s.lastEventType || "");
+
+      // Timeout-Popup: schließen wenn ein neues Event kam (z. B. nächstes Tor, oder „Spiel läuft weiter“ / „Auszeit beendet“, falls die API das sendet); sonst Fallback 30 s
+      var timeoutPopupEl = $("#timeout-popup");
+      if (timeoutPopupEl && timeoutPopupEl.classList.contains("show") && timeoutPopupEventKey !== "") {
+        if (currentEventKey !== timeoutPopupEventKey) {
+          hideTimeoutPopup();
+        }
+      }
+      // Halbzeit-Popup: schließen wenn ein neues Event kam (z. B. „2. Halbzeit gestartet“); sonst Fallback 8 Min
+      var halftimePopupEl = $("#halftime-popup");
+      if (halftimePopupEl && halftimePopupEl.classList.contains("show") && halftimePopupEventKey !== "") {
+        if (currentEventKey !== halftimePopupEventKey) {
+          hideHalftimePopup();
+        }
+      }
+
+      // Vom Admin ausgelöstes Test-Event einmalig anzeigen (Standard: links)
+      if (s._testEvent && s._testEvent.eventType) {
+        showEventPopup({
+          message: s._testEvent.message || "",
+          eventType: s._testEvent.eventType || "Goal",
+          playerName: s._testEvent.playerName || ""
+        }, s._testEvent.side || "left");
+      }
+
+      // Auszeit-Popup einmalig anzeigen (Payload vom Server)
+      if (s._timeoutPopup && s._timeoutPopup.team != null) {
+        showTimeoutPopup(s._timeoutPopup, currentEventKey);
+      }
+
+      // Halbzeit-Popup einmalig anzeigen (Payload vom Server)
+      if (s._halftimePopup && s._halftimePopup.homePlayers) {
+        showHalftimePopup(s._halftimePopup, currentEventKey);
+      }
 
       dbg('CLIENT_REQUEST_DETAILS', {
         reqId: reqId,
@@ -571,14 +615,9 @@ function refreshScore() {
             // Entferne alle vorherigen Tor-Klassen
             broadcastBar.classList.remove("home-goal", "away-goal");
 
-            // Prüfe ob es ein Tor von HSG Kastellaun/Simmern ist
-            var isOurTeam = (s.homeTeam && s.homeTeam.includes("HSG Kastellaun/Simmern")) ||
-              (s.awayTeam && s.awayTeam.includes("HSG Kastellaun/Simmern"));
-
             console.log("Intelligente Tor-Animation:", {
               homeTeam: s.homeTeam,
               awayTeam: s.awayTeam,
-              isOurTeam: isOurTeam,
               isHomeGoal: isHomeGoal,
               isAwayGoal: isAwayGoal,
               scorer: s.lastScorer,
@@ -586,27 +625,34 @@ function refreshScore() {
               oldScore: currentHomeGoals + ":" + currentAwayGoals
             });
 
-            // Player-Goal-Display nur bei herren1 anzeigen
-            var shouldShowPlayerGoal = currentTeamType !== "damen1" && isOurTeam && s.lastScorer;
+            // Player-Goal-Display für beide Teams: Heim links, Auswärts rechts; bei gesetztem ourTeamName nur für unser Team
+            var lastType = (s.lastEventType || "").trim();
+            var isGoalEventType = lastType === "Goal" || lastType === "SevenMeterGoal";
+            var goalEventType = lastType === "SevenMeterGoal" ? "SevenMeterGoal" : "Goal";
+            var shouldShowPlayerGoal = s.lastScorer && isGoalEventType && eventIsForOurTeam(s, s.lastEvent);
+            var eventSide = isHomeGoal ? "left" : (isAwayGoal ? "right" : "left");
 
             if (isHomeGoal) {
               broadcastBar.classList.add("goal-animation", "home-goal");
               if (scoreMain) scoreMain.classList.add('scored-home');
               if (homeNumEl) homeNumEl.classList.add('scored-home');
               if (shouldShowPlayerGoal) {
-                showPlayerGoal(s.lastScorer, false);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             } else if (isAwayGoal) {
               broadcastBar.classList.add("goal-animation", "away-goal");
               if (scoreMain) scoreMain.classList.add('scored-away');
               if (awayNumEl) awayNumEl.classList.add('scored-away');
               if (shouldShowPlayerGoal) {
-                showPlayerGoal(s.lastScorer, false);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             } else {
               broadcastBar.classList.add("goal-animation");
               if (shouldShowPlayerGoal) {
-                showPlayerGoal(s.lastScorer, false);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             }
 
@@ -634,6 +680,19 @@ function refreshScore() {
       if (shouldUpdateEvent) {
         stableEventText = newEvent;
         $("#lastEvent").textContent = newEvent;
+
+        // Pop-up für Karten/2 Min/Rote Karte für beide Teams: Heim links, Auswärts rechts (einmal pro Event)
+        var eventType = (s.lastEventType || "").trim();
+        var cardPopupTypes = ["Warning", "TwoMinutePenalty", "Disqualification", "BlueCard"];
+        var isCardPopupType = cardPopupTypes.indexOf(eventType) !== -1;
+        var eventKey = (newEvent || "") + "|" + eventType;
+        var homeTeamName = (s.homeTeam && typeof s.homeTeam === "string") ? s.homeTeam.trim() : "";
+        var awayTeamName = (s.awayTeam && typeof s.awayTeam === "string") ? s.awayTeam.trim() : "";
+        var eventSide = homeTeamName && newEvent.indexOf(homeTeamName) !== -1 ? "left" : (awayTeamName && newEvent.indexOf(awayTeamName) !== -1 ? "right" : "left");
+        if (isCardPopupType && eventKey !== lastShownEventKey && eventIsForOurTeam(s, newEvent)) {
+          showEventPopup({ message: newEvent || "", eventType: eventType, playerName: "" }, eventSide);
+          lastShownEventKey = eventKey;
+        }
       }
 
       // Status-Update (ohne Stabilitätsprüfung, da sich selten ändert)
@@ -682,74 +741,448 @@ function refreshScore() {
     });
 }
 
-/* Spieler-Tor-Anzeige */
-function showPlayerGoal(playerName, isHomeTeam) {
-  var playerDisplay = $("#player-goal-display");
-  var playerImage = $("#player-image");
-  var playerNameEl = $("#player-name");
-  if (!playerDisplay || !playerNameEl) return;
+/* Event-Icons als SVG (nur gelb, 2min, rot, blau – Tor und 7m ohne Icon) */
+function getEventIconSVG(eventType) {
+  var t = (eventType || "").trim();
+  if (t === "Goal" || t === "SevenMeterGoal") return "";
+  var icons = {
+    Warning: '<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="2" width="40" height="44" rx="4" fill="#EAB308" stroke="#fff" stroke-width="1.5"/></svg>',
+    TwoMinutePenalty: '<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="2" width="40" height="44" rx="4" fill="#1a1a1a" stroke="#fff" stroke-width="1.5"/><text x="24" y="32" text-anchor="middle" fill="#fff" font-size="24" font-weight="bold" font-family="sans-serif">2' + "'" + '</text></svg>',
+    Disqualification: '<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="2" width="40" height="44" rx="4" fill="#DC2626" stroke="#fff" stroke-width="1.5"/></svg>',
+    BlueCard: '<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><rect x="4" y="2" width="40" height="44" rx="4" fill="#2563EB" stroke="#fff" stroke-width="1.5"/></svg>'
+  };
+  return icons[t] || "";
+}
 
-  // Vorherige Anzeige verstecken falls vorhanden
-  if (playerDisplayTimeout) {
-    clearTimeout(playerDisplayTimeout);
-    playerDisplayTimeout = null;
+/* Überschrift pro Event-Typ (einheitliches Pop-up: oben Überschrift, unten Spielername) */
+function getEventHeadline(eventType) {
+  var t = (eventType || "").trim();
+  var headlines = {
+    Goal: "Tor durch",
+    SevenMeterGoal: "7-Meter-Tor durch",
+    Warning: "Gelbe Karte für",
+    TwoMinutePenalty: "Zwei Minuten für",
+    Disqualification: "Rote Karte für",
+    BlueCard: "Blaue Karte für"
+  };
+  return headlines[t] || "Tor durch";
+}
+
+/* Einheitliches Event-Pop-up: immer Icon + Bild/Platzhalter + Überschrift + Spielername. side = "left" | "right" */
+function showEventPopup(options, side) {
+  var message = options.message || "";
+  var eventType = (options.eventType || "").trim();
+  var playerName = options.playerName || "";
+  if (side !== "left" && side !== "right") side = "left";
+  var isRight = side === "right";
+  var playerDisplay = isRight ? $("#player-goal-display-away") : $("#player-goal-display");
+  var eventIconEl = isRight ? $("#event-icon-away") : $("#event-icon");
+  var playerImageEl = isRight ? $("#player-image-away") : $("#player-image");
+  var playerNameEl = isRight ? $("#player-name-away") : $("#player-name");
+  var goalTextEl = isRight ? $("#goal-text-away") : $("#goal-text");
+  var eventMessageEl = isRight ? $("#event-message-away") : $("#event-message");
+  var playerImageContainer = playerDisplay ? playerDisplay.querySelector(".player-image-container") : null;
+  if (!playerDisplay || !eventIconEl) return;
+
+  if (isRight) {
+    if (playerDisplayTimeoutAway) {
+      clearTimeout(playerDisplayTimeoutAway);
+      playerDisplayTimeoutAway = null;
+    }
+  } else {
+    if (playerDisplayTimeout) {
+      clearTimeout(playerDisplayTimeout);
+      playerDisplayTimeout = null;
+    }
   }
 
-  // Spielername setzen
-  playerNameEl.textContent = playerName;
+  var iconSvg = getEventIconSVG(eventType);
+  eventIconEl.innerHTML = iconSvg;
+  eventIconEl.style.display = iconSvg ? "" : "none";
 
-  // Spielerbild versuchen zu laden
-  var imageFileName = generateImageFileName(playerName);
-  var imagePath = "/assets/players/" + imageFileName;
+  if (!playerName) {
+    playerName = extractPlayerNameFromEventMessage(message);
+  }
 
-  // Bild laden und anzeigen
-  var img = new Image();
-  img.onload = function () {
-    playerImage.src = imagePath;
-    playerImage.style.display = "block";
-    // Entferne Platzhalter-Klassen falls vorhanden
-    playerImage.classList.remove("placeholder-avatar");
-  };
-  img.onerror = function () {
-    // Kein Bild gefunden - zeige Platzhalter-Avatar
-    playerImage.src = "data:image/svg+xml;base64," + btoa(`
-      <svg width="90" height="90" viewBox="0 0 90 90" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="45" cy="45" r="45" fill="#4A5568"/>
-        <circle cx="45" cy="33" r="12" fill="#E2E8F0"/>
-        <path d="M22.5 67.5c0-12.426 10.074-22.5 22.5-22.5s22.5 10.074 22.5 22.5" fill="#E2E8F0"/>
-      </svg>
-    `);
-    playerImage.style.display = "block";
-    playerImage.classList.add("placeholder-avatar");
-  };
-  img.src = imagePath;
+  if (goalTextEl) {
+    goalTextEl.textContent = getEventHeadline(eventType);
+    goalTextEl.style.display = "";
+  }
+  if (playerNameEl) {
+    playerNameEl.textContent = playerName || "";
+    playerNameEl.style.display = "";
+  }
+  if (eventMessageEl) {
+    var cardTypes = ["Warning", "TwoMinutePenalty", "Disqualification", "BlueCard"];
+    var isCardType = cardTypes.indexOf(eventType) !== -1;
+    var shortMsg = (message || "").replace(/^\d{1,2}:\d{2}\s*-\s*/, "").trim();
+    if (isCardType && !playerName && shortMsg) {
+      eventMessageEl.textContent = shortMsg;
+      eventMessageEl.classList.remove("hidden");
+    } else {
+      eventMessageEl.textContent = "";
+      eventMessageEl.classList.add("hidden");
+    }
+  }
+  if (playerImageContainer) {
+    playerImageContainer.style.display = "";
+    loadPlayerImage(playerName, playerImageEl);
+  }
 
-  // Anzeige zeigen
   playerDisplay.classList.remove("hidden");
   playerDisplay.classList.add("show");
 
-  console.log("Player goal display shown for:", playerName);
-
-  // Nach 10 Sekunden verstecken
-  playerDisplayTimeout = setTimeout(function () {
-    console.log("Hiding player goal display after 10 seconds");
-    hidePlayerGoal();
-  }, 10000);
+  if (isRight) {
+    playerDisplayTimeoutAway = setTimeout(function () {
+      hidePlayerGoal("right");
+    }, 10000);
+  } else {
+    playerDisplayTimeout = setTimeout(function () {
+      hidePlayerGoal("left");
+    }, 10000);
+  }
 }
 
-function hidePlayerGoal() {
-  var playerDisplay = $("#player-goal-display");
-  if (playerDisplay) {
-    playerDisplay.classList.remove("show");
-    setTimeout(function () {
-      playerDisplay.classList.add("hidden");
-    }, 500);
+var PLACEHOLDER_AVATAR_SVG = '<svg width="120" height="120" viewBox="0 0 150 150" xmlns="http://www.w3.org/2000/svg"><circle cx="75" cy="75" r="75" fill="#4A5568"/><circle cx="75" cy="55" r="20" fill="#E2E8F0"/><path d="M37.5 112.5c0-20.71 16.79-37.5 37.5-37.5s37.5 16.79 37.5 37.5" fill="#E2E8F0"/></svg>';
+
+function setPlaceholderAvatar(playerImageEl) {
+  if (!playerImageEl) return;
+  playerImageEl.src = "data:image/svg+xml;base64," + btoa(PLACEHOLDER_AVATAR_SVG);
+  playerImageEl.style.display = "block";
+  playerImageEl.classList.add("placeholder-avatar");
+}
+
+function loadPlayerImage(playerName, playerImageEl) {
+  if (!playerImageEl) return;
+  if (!playerName) {
+    setPlaceholderAvatar(playerImageEl);
+    return;
+  }
+  var imageFileName = generateImageFileName(playerName);
+  var imagePath = "/assets/players/" + imageFileName;
+  var img = new Image();
+  img.onload = function () {
+    playerImageEl.src = imagePath;
+    playerImageEl.style.display = "block";
+    playerImageEl.classList.remove("placeholder-avatar");
+  };
+  img.onerror = function () {
+    setPlaceholderAvatar(playerImageEl);
+  };
+  img.src = imagePath;
+}
+
+/* Spieler-Tor-Anzeige (ruft showEventPopup mit Goal/SevenMeterGoal auf) */
+function showPlayerGoal(playerName, isHomeTeam) {
+  showEventPopup({
+    message: "Tor durch " + (playerName || ""),
+    eventType: "Goal",
+    playerName: playerName || ""
+  }, isHomeTeam ? "left" : "right");
+}
+
+function hidePlayerGoal(side) {
+  if (!side || side === "left") {
+    var playerDisplayLeft = $("#player-goal-display");
+    if (playerDisplayLeft) {
+      playerDisplayLeft.classList.remove("show");
+      setTimeout(function () {
+        playerDisplayLeft.classList.add("hidden");
+      }, 500);
+    }
+    if (playerDisplayTimeout) {
+      clearTimeout(playerDisplayTimeout);
+      playerDisplayTimeout = null;
+    }
+  }
+  if (!side || side === "right") {
+    var playerDisplayRight = $("#player-goal-display-away");
+    if (playerDisplayRight) {
+      playerDisplayRight.classList.remove("show");
+      setTimeout(function () {
+        playerDisplayRight.classList.add("hidden");
+      }, 500);
+    }
+    if (playerDisplayTimeoutAway) {
+      clearTimeout(playerDisplayTimeoutAway);
+      playerDisplayTimeoutAway = null;
+    }
+  }
+}
+
+/* Auszeit-Popup: groß, Mitte (Team-Logo, Sponsor, letzte 5 Events, Top-3-Torschützen) */
+function showTimeoutPopup(payload, eventKey) {
+  var popup = $("#timeout-popup");
+  if (!popup) return;
+
+  if (timeoutPopupHideTimer) {
+    clearTimeout(timeoutPopupHideTimer);
+    timeoutPopupHideTimer = null;
+  }
+  timeoutPopupEventKey = (eventKey != null && eventKey !== undefined) ? String(eventKey) : "";
+
+  hidePlayerGoal();
+
+  var teamLogoEl = $("#timeout-team-logo");
+  var sponsorLogoEl = $("#timeout-sponsor-logo");
+  var eventsList = $("#timeout-events-list");
+  var homeList = $("#timeout-scorers-home-list");
+  var awayList = $("#timeout-scorers-away-list");
+  var homeHeadingLogo = $("#timeout-scorers-home-logo");
+  var awayHeadingLogo = $("#timeout-scorers-away-logo");
+
+  if (homeHeadingLogo) {
+    if (payload.homeLogoUrl) {
+      homeHeadingLogo.src = payload.homeLogoUrl;
+      homeHeadingLogo.style.display = "";
+    } else {
+      homeHeadingLogo.style.display = "none";
+    }
+  }
+  if (awayHeadingLogo) {
+    if (payload.awayLogoUrl) {
+      awayHeadingLogo.src = payload.awayLogoUrl;
+      awayHeadingLogo.style.display = "";
+    } else {
+      awayHeadingLogo.style.display = "none";
+    }
   }
 
-  if (playerDisplayTimeout) {
-    clearTimeout(playerDisplayTimeout);
-    playerDisplayTimeout = null;
+  if (teamLogoEl && payload.teamLogoUrl) {
+    teamLogoEl.src = payload.teamLogoUrl;
+    teamLogoEl.style.display = "block";
+  } else if (teamLogoEl) {
+    teamLogoEl.style.display = "none";
   }
+
+  var sponsorUrl = (sponsorUrls.length && sponsorUrls[currentSponsorIndex]) ? sponsorUrls[currentSponsorIndex] : "";
+  if (sponsorLogoEl) {
+    if (sponsorUrl) {
+      sponsorLogoEl.src = sponsorUrl;
+      sponsorLogoEl.style.display = "block";
+    } else {
+      sponsorLogoEl.style.display = "none";
+    }
+  }
+  rotateSponsor();
+
+  if (eventsList) {
+    eventsList.innerHTML = "";
+    var events = payload.last5Events || [];
+    for (var i = 0; i < events.length; i++) {
+      var e = events[i];
+      var li = document.createElement("li");
+      var timeSpan = document.createElement("span");
+      timeSpan.className = "timeout-event-time";
+      timeSpan.textContent = (e.time || "").trim() || "–";
+      li.appendChild(timeSpan);
+      li.appendChild(document.createTextNode(" " + (e.message || "").trim()));
+      eventsList.appendChild(li);
+    }
+  }
+
+  function fillScorersList(listEl, scorers) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    var arr = Array.isArray(scorers) ? scorers : [];
+    for (var j = 0; j < 3; j++) {
+      var item = document.createElement("div");
+      item.className = "timeout-scorer-item";
+      var img = document.createElement("img");
+      img.className = "timeout-scorer-avatar";
+      img.alt = "";
+      var numberEl = document.createElement("span");
+      numberEl.className = "timeout-scorer-number";
+      var nameEl = document.createElement("span");
+      nameEl.className = "timeout-scorer-name";
+      var goalsEl = document.createElement("span");
+      goalsEl.className = "timeout-scorer-goals";
+      var number = "";
+      var name = "";
+      var goals = 0;
+      if (arr[j]) {
+        number = (arr[j].number != null && arr[j].number !== "") ? String(arr[j].number) : "";
+        name = (arr[j].name || "").trim() || "–";
+        goals = typeof arr[j].goals === "number" ? arr[j].goals : parseInt(arr[j].goals, 10) || 0;
+      } else {
+        name = "–";
+      }
+      numberEl.textContent = number ? "Nr. " + number : "";
+      nameEl.textContent = name;
+      goalsEl.textContent = goals;
+      loadPlayerImage(name === "–" ? "" : name, img);
+      item.appendChild(img);
+      item.appendChild(numberEl);
+      item.appendChild(nameEl);
+      item.appendChild(goalsEl);
+      listEl.appendChild(item);
+    }
+  }
+  fillScorersList(homeList, payload.top3Home);
+  fillScorersList(awayList, payload.top3Away);
+
+  var sponsorDisplay = $("#sponsor-display");
+  if (sponsorDisplay) sponsorDisplay.style.display = "none";
+
+  popup.classList.remove("hidden");
+  popup.classList.add("show");
+
+  timeoutPopupHideTimer = setTimeout(function () {
+    hideTimeoutPopup();
+    timeoutPopupHideTimer = null;
+  }, 30000);
+}
+
+function hideTimeoutPopup() {
+  var popup = $("#timeout-popup");
+  if (popup) {
+    popup.classList.remove("show");
+    setTimeout(function () {
+      popup.classList.add("hidden");
+    }, 350);
+  }
+  if (timeoutPopupHideTimer) {
+    clearTimeout(timeoutPopupHideTimer);
+    timeoutPopupHideTimer = null;
+  }
+  timeoutPopupEventKey = "";
+  var halftimePopup = $("#halftime-popup");
+  var sponsorDisplay = $("#sponsor-display");
+  if (sponsorDisplay && (!halftimePopup || !halftimePopup.classList.contains("show"))) {
+    sponsorDisplay.style.display = currentTeamType === "damen1" ? "none" : "";
+  }
+}
+
+/* Halbzeit-Popup: Spielerübersicht beider Teams (Nr., Name, Tore, Gelb, 2 Min, Rot, Blau) */
+function showHalftimePopup(payload, eventKey) {
+  var popup = $("#halftime-popup");
+  if (!popup) return;
+
+  if (halftimePopupHideTimer) {
+    clearTimeout(halftimePopupHideTimer);
+    halftimePopupHideTimer = null;
+  }
+  halftimePopupEventKey = (eventKey != null && eventKey !== undefined) ? String(eventKey) : "";
+
+  var titleEl = $("#halftime-popup-title");
+  if (titleEl) titleEl.textContent = (payload.title || "Halbzeit").trim();
+
+  var homeNameEl = $("#halftime-home-name");
+  var awayNameEl = $("#halftime-away-name");
+  if (homeNameEl) homeNameEl.textContent = payload.homeTeam || "Heim";
+  if (awayNameEl) awayNameEl.textContent = payload.awayTeam || "Gast";
+
+  var homeLogoEl = $("#halftime-home-logo");
+  var awayLogoEl = $("#halftime-away-logo");
+  if (homeLogoEl) {
+    if (payload.homeLogoUrl) {
+      homeLogoEl.src = payload.homeLogoUrl;
+      homeLogoEl.style.display = "";
+    } else {
+      homeLogoEl.style.display = "none";
+    }
+  }
+  if (awayLogoEl) {
+    if (payload.awayLogoUrl) {
+      awayLogoEl.src = payload.awayLogoUrl;
+      awayLogoEl.style.display = "";
+    } else {
+      awayLogoEl.style.display = "none";
+    }
+  }
+
+  function numVal(v) {
+    return typeof v === "number" ? v : (parseInt(v, 10) || 0);
+  }
+  function valueCellHtml(val, hasValue, columnType) {
+    var n = numVal(val);
+    var text = n === 0 ? "–" : String(n);
+    if (hasValue) {
+      var pillClass = "halftime-value-pill halftime-pill-" + (columnType || "goals");
+      return "<span class=\"" + pillClass + "\">" + text + "</span>";
+    }
+    return text;
+  }
+  function fillHalftimeTable(tbodyId, players) {
+    var tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    var arr = Array.isArray(players) ? players : [];
+    for (var i = 0; i < arr.length; i++) {
+      var p = arr[i];
+      var tr = document.createElement("tr");
+      var goals = numVal(p.goals);
+      var yc = numVal(p.yellowCards);
+      var t2 = numVal(p.timePenalties);
+      var rc = numVal(p.redCards);
+      var bc = numVal(p.blueCards);
+      tr.innerHTML =
+        "<td>" + (p.number != null && p.number !== "" ? p.number : "–") + "</td>" +
+        "<td class=\"halftime-cell-name\">" + (p.name || "–") + "</td>" +
+        "<td class=\"" + (goals > 0 ? "halftime-cell-value" : "") + "\">" + valueCellHtml(p.goals, goals > 0, "goals") + "</td>" +
+        "<td class=\"" + (yc > 0 ? "halftime-cell-value" : "") + "\">" + valueCellHtml(p.yellowCards, yc > 0, "yellow") + "</td>" +
+        "<td class=\"" + (t2 > 0 ? "halftime-cell-value" : "") + "\">" + valueCellHtml(p.timePenalties, t2 > 0, "2min") + "</td>" +
+        "<td class=\"" + (rc > 0 ? "halftime-cell-value" : "") + "\">" + valueCellHtml(p.redCards, rc > 0, "red") + "</td>" +
+        "<td class=\"" + (bc > 0 ? "halftime-cell-value" : "") + "\">" + valueCellHtml(p.blueCards, bc > 0, "blue") + "</td>";
+      tbody.appendChild(tr);
+    }
+  }
+  fillHalftimeTable("halftime-home-tbody", payload.homePlayers || []);
+  fillHalftimeTable("halftime-away-tbody", payload.awayPlayers || []);
+
+  var sponsorDisplay = $("#sponsor-display");
+  if (sponsorDisplay) sponsorDisplay.style.display = "none";
+
+  popup.classList.remove("hidden");
+  popup.classList.add("show");
+
+  var durationMs = (payload.isTest === true) ? 30000 : 8 * 60 * 1000; // 30s Test, sonst 8 Min
+  halftimePopupHideTimer = setTimeout(function () {
+    hideHalftimePopup();
+    halftimePopupHideTimer = null;
+  }, durationMs);
+}
+
+function hideHalftimePopup() {
+  var popup = $("#halftime-popup");
+  if (popup) {
+    popup.classList.remove("show");
+    setTimeout(function () {
+      popup.classList.add("hidden");
+    }, 350);
+  }
+  if (halftimePopupHideTimer) {
+    clearTimeout(halftimePopupHideTimer);
+    halftimePopupHideTimer = null;
+  }
+  halftimePopupEventKey = "";
+  var timeoutPopup = $("#timeout-popup");
+  var sponsorDisplay = $("#sponsor-display");
+  if (sponsorDisplay && (!timeoutPopup || !timeoutPopup.classList.contains("show"))) {
+    sponsorDisplay.style.display = currentTeamType === "damen1" ? "none" : "";
+  }
+}
+
+/* Spielername aus Event-Message extrahieren.
+ * - Tore: "Tor durch Name (9.)" oder "7-Meter Tor durch Name (17.) (Verein)" → Name
+ * - Karten/Strafen: "Name (9.) (Verein) erhält ..." → Name
+ */
+function extractPlayerNameFromEventMessage(message) {
+  if (!message || typeof message !== "string") return "";
+  var text = message.replace(/^\d{1,2}:\d{2}\s*-\s*/, "").trim();
+  // Zuerst Tor/7m-Muster: optional "7-Meter " dann "Tor durch Name (nr.)"
+  var goalMatch = text.match(/(?:7-Meter\s+)?Tor durch ([^(]+?)\s*\(\d+\.\)/);
+  if (goalMatch) {
+    var name = (goalMatch[1] || "").trim();
+    if (name.length >= 2 && /[a-zA-Z\u00C0-\u024F]/.test(name)) return name;
+    return "";
+  }
+  // Karten/Strafen: "Name (nr.) (Verein) ..."
+  var m = text.match(/^([^(]+?)\s*\(\d+\.\)\s*\([^)]+\)/);
+  if (!m) return "";
+  var name = (m[1] || "").trim();
+  if (name.length < 2 || !/[a-zA-Z\u00C0-\u024F]/.test(name)) return "";
+  return name;
 }
 
 function generateImageFileName(playerName) {
@@ -794,37 +1227,41 @@ function showToast(text) {
 var currentTeamType = "herren1";
 
 function updateDisplayBasedOnTeamType() {
-  var broadcastContainer = $(".broadcast-container");
+  var broadcastWrapper = $(".broadcast-wrapper");
   var gameInfoBar = $(".game-info-bar");
-  var playerGoalDisplay = $("#player-goal-display");
-  var sponsorDisplay = $(".sponsor-display");
+  var sponsorDisplay = $("#sponsor-display");
+  var playerGoalDisplayLeft = $("#player-goal-display");
+  var playerGoalDisplayRight = $("#player-goal-display-away");
   var clubLogoDisplay = $("#club-logo-display");
 
   if (currentTeamType === "damen1") {
-    // Nur Sponsor-Anzeige und Vereinslogo zeigen
-    if (broadcastContainer) broadcastContainer.style.display = "none";
+    if (broadcastWrapper) broadcastWrapper.style.display = "none";
     if (gameInfoBar) gameInfoBar.style.display = "none";
-    // Player-Goal-Display bei damen1 immer verstecken
-    if (playerGoalDisplay) {
-      playerGoalDisplay.classList.add("hidden");
-      playerGoalDisplay.style.display = "none";
+    if (sponsorDisplay) sponsorDisplay.style.display = "none";
+    if (playerGoalDisplayLeft) {
+      playerGoalDisplayLeft.classList.add("hidden");
+      playerGoalDisplayLeft.style.display = "none";
     }
-    if (sponsorDisplay) sponsorDisplay.style.display = "block";
+    if (playerGoalDisplayRight) {
+      playerGoalDisplayRight.classList.add("hidden");
+      playerGoalDisplayRight.style.display = "none";
+    }
     if (clubLogoDisplay) {
       clubLogoDisplay.classList.remove("hidden");
       loadClubLogo();
     }
   } else {
-    // Alle Elemente zeigen (Herren 1)
-    if (broadcastContainer) broadcastContainer.style.display = "";
+    if (broadcastWrapper) broadcastWrapper.style.display = "";
     if (gameInfoBar) gameInfoBar.style.display = "";
-    // Player-Goal-Display bei herren1 sichtbar machen (wird bei Tor automatisch angezeigt)
-    if (playerGoalDisplay) {
-      playerGoalDisplay.classList.remove("hidden");
-      // Inline display style explizit löschen, damit CSS-Klassen funktionieren
-      playerGoalDisplay.style.display = "";
-    }
     if (sponsorDisplay) sponsorDisplay.style.display = "";
+    if (playerGoalDisplayLeft) {
+      playerGoalDisplayLeft.classList.remove("hidden");
+      playerGoalDisplayLeft.style.display = "";
+    }
+    if (playerGoalDisplayRight) {
+      playerGoalDisplayRight.classList.remove("hidden");
+      playerGoalDisplayRight.style.display = "";
+    }
     if (clubLogoDisplay) clubLogoDisplay.classList.add("hidden");
   }
 }

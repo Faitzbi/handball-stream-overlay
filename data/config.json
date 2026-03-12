@@ -1,7 +1,9 @@
 {
-  "tickerUrl": "https://hvrheinland-handball.liga.nu/cgi-bin/WebObjects/nuLigaHBDE.woa/wa/groupMeetingReport?meeting=8069458&championship=HVRL+25%2F26&group=448227",
-  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
-  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/4c2b3d1e-4f92-43c2-b183-eb5f822811bf.jpeg?d=100x",
+  "tickerUrl": "https://www.handball.net/spiele/handball4all.ol-rheinland-pfalz-saar.8340531/ticker",
+  "homeLogoUrl": "https://www.handball.net/files/clubs/logos/1383a2ed-3605-4b0b-b686-eace1fdac3e0.png",
+  "awayLogoUrl": "https://www.handball.net/files/clubs/logos/13f1e43d-b000-4b72-a8c9-49837c73a142.png",
   "mascotUrl": "",
-  "teamType": "damen1"
+  "teamType": "herren1",
+  "scheduleUrl": "https://www.handball.net/mannschaften/handball4all.ol-rheinland-pfalz-saar.1293696/spielplan?dateFrom=2025-07-01&dateTo=2026-06-30",
+  "ourTeamName": ""
 }

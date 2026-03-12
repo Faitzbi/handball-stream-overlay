@@ -56,10 +56,13 @@ async function load() {
     
     // Populate form fields
     document.getElementById("tickerUrl").value = cfg.tickerUrl || "";
+    document.getElementById("scheduleUrl").value = cfg.scheduleUrl || "";
+    document.getElementById("ourTeamName").value = cfg.ourTeamName || "";
     document.getElementById("homeLogoUrl").value = cfg.homeLogoUrl || "";
     document.getElementById("awayLogoUrl").value = cfg.awayLogoUrl || "";
     document.getElementById("teamType").value = cfg.teamType || "herren1";
     document.getElementById("overlayLink").textContent = `${location.origin}/overlay`;
+    updateScheduleButtonState();
 
     // Populate score fields
     for (const k of ["homeTeam","awayTeam","homeGoals","awayGoals","clock","period","lastScorer"]) {
@@ -82,6 +85,8 @@ document.getElementById("saveCfg").addEventListener("click", async () => {
     
     const payload = {
       tickerUrl: document.getElementById("tickerUrl").value.trim(),
+      scheduleUrl: document.getElementById("scheduleUrl").value.trim(),
+      ourTeamName: document.getElementById("ourTeamName").value.trim(),
       homeLogoUrl: document.getElementById("homeLogoUrl").value.trim(),
       awayLogoUrl: document.getElementById("awayLogoUrl").value.trim(),
       teamType: document.getElementById("teamType").value,
@@ -89,6 +94,7 @@ document.getElementById("saveCfg").addEventListener("click", async () => {
     
     await jpost("/api/config", payload);
     showToast("Konfiguration erfolgreich gespeichert! Fetcher läuft (falls URL gesetzt).", 'success');
+    updateScheduleButtonState();
   } catch (error) {
     console.error('Fehler beim Speichern der Konfiguration:', error);
     showToast('Fehler beim Speichern: ' + error.message, 'error');
@@ -96,6 +102,86 @@ document.getElementById("saveCfg").addEventListener("click", async () => {
     setLoading(button, false);
   }
 });
+
+// Spielplan: Button-Zustand je nach scheduleUrl. Nach Fehler Retry erlauben (keepEnabledAfterError = true).
+function updateScheduleButtonState(keepEnabledAfterError) {
+  const scheduleUrl = (document.getElementById("scheduleUrl") && document.getElementById("scheduleUrl").value || "").trim();
+  const btn = document.getElementById("loadUpcoming");
+  const hint = document.getElementById("scheduleLoadHint");
+  if (btn) btn.disabled = keepEnabledAfterError ? false : !scheduleUrl;
+  if (hint) hint.style.display = scheduleUrl ? "none" : "inline";
+}
+
+// Nächste Spiele laden und anzeigen
+const loadUpcomingEl = document.getElementById("loadUpcoming");
+if (loadUpcomingEl) {
+  loadUpcomingEl.addEventListener("click", async () => {
+  const btn = document.getElementById("loadUpcoming");
+  const listEl = document.getElementById("upcomingGamesList");
+  const container = document.getElementById("upcomingGames");
+  let errorOccurred = false;
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Lade...';
+    }
+    const res = await fetch("/api/schedule/upcoming");
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const errData = await res.json();
+        if (errData && errData.error) errMsg = errData.error;
+      } catch (_) { /* Body kein JSON */ }
+      throw new Error(errMsg);
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch (_) {
+      throw new Error("Ungültige Antwort vom Server (kein gültiges JSON).");
+    }
+    const games = Array.isArray(data) ? data : [];
+    listEl.innerHTML = "";
+    if (games.length === 0) {
+      listEl.innerHTML = '<p style="color: var(--text-secondary);">Keine zukünftigen Spiele gefunden.</p>';
+    } else {
+      games.forEach((game) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "upcoming-game-item";
+        item.dataset.tickerUrl = game.tickerUrl || "";
+        item.textContent = game.label || "";
+        if (game.dateTime) {
+          const small = document.createElement("small");
+          small.textContent = game.dateTime;
+          item.appendChild(small);
+        }
+        item.addEventListener("click", async () => {
+          const tickerUrl = item.dataset.tickerUrl;
+          if (!tickerUrl) return;
+          document.getElementById("tickerUrl").value = tickerUrl;
+          try {
+            const currentCfg = await jget("/api/config");
+            await jpost("/api/config", { ...currentCfg, tickerUrl });
+            showToast("Ticker-URL gesetzt und gespeichert.", "success");
+          } catch (e) {
+            console.error("Ticker setzen fehlgeschlagen:", e);
+            showToast("Fehler beim Speichern: " + e.message, "error");
+          }
+        });
+        listEl.appendChild(item);
+      });
+    }
+    container.style.display = "block";
+  } catch (error) {
+    errorOccurred = true;
+    showToast(error.message || "Spiele konnten nicht geladen werden.", "error");
+  } finally {
+    if (btn) btn.innerHTML = '<i class="fas fa-sync-alt"></i> Nächste Spiele laden';
+    updateScheduleButtonState(errorOccurred);
+  }
+  });
+}
 
 // Save score
 document.getElementById("saveScore").addEventListener("click", async () => {
@@ -189,6 +275,50 @@ function setupAutoSave() {
     });
   });
 }
+
+// Overlay-Test-Events: Buttons senden einmaliges Test-Event an Overlay
+document.querySelectorAll('.btn-test-event').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const eventType = btn.getAttribute('data-type') || 'Goal';
+    const defaultMsg = btn.getAttribute('data-msg') || '';
+    const customMessage = (document.getElementById('testEventMessage') && document.getElementById('testEventMessage').value.trim()) || '';
+    const customPlayer = (document.getElementById('testEventPlayer') && document.getElementById('testEventPlayer').value.trim()) || '';
+    const message = customMessage || defaultMsg;
+    let playerName = customPlayer;
+    if (!playerName && (eventType === 'Goal' || eventType === 'SevenMeterGoal')) {
+      // Beide Formate: "Tor durch Name (9.)" und "7-Meter Tor durch Name (17.)"
+      const m = message.match(/(?:7-Meter\s+)?Tor durch ([^(]+?)\s*\(\d+\.\)/);
+      if (m) playerName = m[1].trim();
+    }
+    try {
+      await jpost('/api/admin/test-event', { eventType, message, playerName });
+      showToast('Test-Event gesendet – im Overlay beim nächsten Poll sichtbar.', 'success');
+    } catch (error) {
+      console.error('Test-Event Fehler:', error);
+      showToast('Fehler: ' + error.message, 'error');
+    }
+  });
+});
+
+document.getElementById('testTimeoutPopup')?.addEventListener('click', async () => {
+  try {
+    await jpost('/api/admin/test-timeout-popup', { team: 'Home' });
+    showToast('Auszeit-Popup mit aktuellem Spielstand gesendet – im Overlay beim nächsten Poll sichtbar (30 s).', 'success');
+  } catch (error) {
+    console.error('Auszeit-Popup Fehler:', error);
+    showToast('Fehler: ' + error.message, 'error');
+  }
+});
+
+document.getElementById('testHalftimePopup')?.addEventListener('click', async () => {
+  try {
+    await jpost('/api/admin/test-halftime-popup', {});
+    showToast('Halbzeit-Popup wird beim nächsten Overlay-Poll angezeigt (max. 30 Sekunden im Test).', 'success');
+  } catch (error) {
+    console.error('Halbzeit-Popup Fehler:', error);
+    showToast('Fehler: ' + error.message, 'error');
+  }
+});
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
