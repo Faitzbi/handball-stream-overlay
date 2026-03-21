@@ -73,6 +73,19 @@ function eventIndicatesGameStartOrResume(ev) {
   return /spiel\s+gestartet|anpfiff|spielbeginn|spiel\s+läuft\s+weiter|auszeit\s+beendet|halbzeit\s+beendet|zweite\s+halbzeit\s+gestartet/.test(msg);
 }
 
+// Halbzeit-Statistik-Popup: nur Ende 1. Halbzeit (nicht 2. HZ / Spielende)
+function isFirstHalfEndStopPeriod(ev) {
+  if (!ev) return false;
+  const type = (ev.type || ev.eventType || '').trim();
+  if (type !== 'StopPeriod') return false;
+  const msg = (ev.message || '').trim();
+  const msgLower = msg.toLowerCase();
+  if (/2\.\s*halbzeit|spielabschluss|spielende\b/.test(msgLower)) return false;
+  if (/1\.\s*halbzeit/i.test(msg)) return true;
+  const timeStr = String(ev.time || ev.gameTime || '').trim();
+  return timeStr === '30:00';
+}
+
 // Score regression protection
 function protectScoreRegression(newScore, currentScore, isGameSwitch) {
   if (isGameSwitch) return newScore; // Allow reset on game switch
@@ -650,7 +663,7 @@ app.get('/api/logos', (req, res) => {
 let pendingTestEvent = null;
 // Auszeit-Popup: einmalig an nächsten /api/score-Abruf anhängen, dann zurücksetzen
 let pendingTimeoutPopup = null;
-// Halbzeit-Popup: einmalig bei StopPeriod-Event (oder Admin-Test)
+// Halbzeit-Popup: einmalig bei Ende 1. Halbzeit (JSON-Ticker) oder Admin-Test
 let pendingHalftimePopup = null;
 
 app.post('/api/admin/test-event', (req, res) => {
@@ -1923,10 +1936,8 @@ async function fetchOnce() {
         };
       }
 
-      // Halbzeit-Popup: einmaliges Payload bei StopPeriod (z. B. "Spielstand 1. Halbzeit")
-      const eventType = (newestEvent && (newestEvent.type || newestEvent.eventType)) || '';
-      const isStopPeriod = eventType === 'StopPeriod' || (newestEvent && (newestEvent.message || '').toLowerCase().includes('halbzeit'));
-      if (newestEvent && isStopPeriod) {
+      // Halbzeit-Popup: einmalig nur nach Ende 1. Halbzeit (nicht nach 2. HZ / Spielabschluss)
+      if (newestEvent && isFirstHalfEndStopPeriod(newestEvent)) {
         const lineup = json.data?.lineup || {};
         const homeLineup = Array.isArray(lineup.home) ? lineup.home : [];
         const awayLineup = Array.isArray(lineup.away) ? lineup.away : [];
