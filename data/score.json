@@ -6,9 +6,9 @@
   "period": "Spiel beendet",
   "lastScorer": "Lea Krauß",
   "lastEvent": "60:00 - Erneut senden mit Pins Heim/Gast/SRA",
-  "lastEventType": "StopPeriod",
+  "lastEventType": "",
   "gameStatus": "Beendet",
   "homeLogoUrl": "https://www.handball.net/files/clubs/logos/1383a2ed-3605-4b0b-b686-eace1fdac3e0.png",
   "awayLogoUrl": "https://www.handball.net/files/clubs/logos/13f1e43d-b000-4b72-a8c9-49837c73a142.png",
-  "lastSourceStamp": 1773257062001
+  "lastSourceStamp": 1773291663143
 }

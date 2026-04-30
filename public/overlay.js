@@ -1049,7 +1049,7 @@ function hideTimeoutPopup() {
   var halftimePopup = $("#halftime-popup");
   var sponsorDisplay = $("#sponsor-display");
   if (sponsorDisplay && (!halftimePopup || !halftimePopup.classList.contains("show"))) {
-    sponsorDisplay.style.display = currentTeamType === "damen1" ? "none" : "";
+    sponsorDisplay.style.display = "";
   }
 }
 
@@ -1159,7 +1159,7 @@ function hideHalftimePopup() {
   var timeoutPopup = $("#timeout-popup");
   var sponsorDisplay = $("#sponsor-display");
   if (sponsorDisplay && (!timeoutPopup || !timeoutPopup.classList.contains("show"))) {
-    sponsorDisplay.style.display = currentTeamType === "damen1" ? "none" : "";
+    sponsorDisplay.style.display = "";
   }
 }
 
@@ -1234,10 +1234,10 @@ function updateDisplayBasedOnTeamType() {
   var playerGoalDisplayRight = $("#player-goal-display-away");
   var clubLogoDisplay = $("#club-logo-display");
 
-  if (currentTeamType === "damen1") {
+  if (currentTeamType === "onlySponsor") {
     if (broadcastWrapper) broadcastWrapper.style.display = "none";
     if (gameInfoBar) gameInfoBar.style.display = "none";
-    if (sponsorDisplay) sponsorDisplay.style.display = "none";
+    if (sponsorDisplay) sponsorDisplay.style.display = "";
     if (playerGoalDisplayLeft) {
       playerGoalDisplayLeft.classList.add("hidden");
       playerGoalDisplayLeft.style.display = "none";
@@ -1271,20 +1271,16 @@ function loadClubLogo() {
   var clubLogoEl = $("#club-logo");
   if (!clubLogoEl) return;
 
-  // Lade das Vereinslogo vom Server
   j("/api/club-logo")
     .then(function (res) {
       if (res && res.logo) {
         clubLogoEl.src = res.logo;
         clubLogoEl.style.display = "block";
-        console.log('[club-logo] Logo geladen:', res.logo);
       } else {
-        console.log('[club-logo] Kein Logo gefunden');
         clubLogoEl.style.display = "none";
       }
     })
-    .catch(function (err) {
-      console.error('[club-logo] Fehler beim Laden:', err);
+    .catch(function () {
       clubLogoEl.style.display = "none";
     });
 }
@@ -1317,8 +1313,8 @@ function init() {
   refreshConfig().then(function () {
     updateDisplayBasedOnTeamType();
     refreshLogos();
-    // Score nur laden wenn nicht "damen1"
-    if (currentTeamType !== "damen1") {
+    // Score nur laden wenn nicht "onlySponsor"
+    if (currentTeamType !== "onlySponsor") {
       refreshScore();
     }
     // Score-Refresh-Interval basierend auf Team-Typ starten/stoppen
@@ -1336,8 +1332,8 @@ function updateScoreRefreshInterval() {
     scoreRefreshInterval = null;
   }
 
-  // Nur bei "herren1" Score-Refresh aktivieren
-  if (currentTeamType !== "damen1") {
+  // Nur wenn Score angezeigt wird
+  if (currentTeamType !== "onlySponsor") {
     scoreRefreshInterval = setInterval(refreshScore, 1000);   // alle 1 Sekunde für schnellere Updates
   }
 }

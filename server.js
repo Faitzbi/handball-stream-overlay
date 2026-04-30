@@ -360,7 +360,7 @@ const DIR = __dirname;
 const PUBLIC_DIR = path.join(DIR, 'public');
 const ASSETS_DIR = path.join(DIR, 'assets');
 const LOGO_DIR = path.join(ASSETS_DIR, 'logos');
-const LOGO_DIR_DAMEN1 = path.join(ASSETS_DIR, 'logos_damen1');
+const LOGO_DIR_ONLY_SPONSOR = path.join(ASSETS_DIR, 'logos_onlySponsor');
 const CLUB_LOGO_DIR = path.join(ASSETS_DIR, 'club_logo');
 const TEAM_DIR = path.join(ASSETS_DIR, 'teams');
 const DATA_DIR = path.join(DIR, 'data');
@@ -373,7 +373,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use('/public', express.static(PUBLIC_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
 
-for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, LOGO_DIR_DAMEN1, CLUB_LOGO_DIR, TEAM_DIR, DATA_DIR, DEBUG_DIR]) {
+for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, LOGO_DIR_ONLY_SPONSOR, CLUB_LOGO_DIR, TEAM_DIR, DATA_DIR, DEBUG_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({
@@ -621,9 +621,8 @@ function readSponsorLogos(logoDir, teamType) {
 // Initiale Logos für beide Verzeichnisse lesen
 function readAllSponsorLogos() {
   const config = readJSON(CONFIG_FILE, {});
-  const teamType = config.teamType || 'herren1';
   readSponsorLogos(LOGO_DIR, 'herren1');
-  readSponsorLogos(LOGO_DIR_DAMEN1, 'damen1');
+  readSponsorLogos(LOGO_DIR_ONLY_SPONSOR, 'onlySponsor');
 }
 readAllSponsorLogos();
 
@@ -632,10 +631,10 @@ chokidar.watch(LOGO_DIR, { ignoreInitial: true })
   .on('add', () => readSponsorLogos(LOGO_DIR, 'herren1'))
   .on('unlink', () => readSponsorLogos(LOGO_DIR, 'herren1'))
   .on('change', () => readSponsorLogos(LOGO_DIR, 'herren1'));
-chokidar.watch(LOGO_DIR_DAMEN1, { ignoreInitial: true })
-  .on('add', () => readSponsorLogos(LOGO_DIR_DAMEN1, 'damen1'))
-  .on('unlink', () => readSponsorLogos(LOGO_DIR_DAMEN1, 'damen1'))
-  .on('change', () => readSponsorLogos(LOGO_DIR_DAMEN1, 'damen1'));
+chokidar.watch(LOGO_DIR_ONLY_SPONSOR, { ignoreInitial: true })
+  .on('add', () => readSponsorLogos(LOGO_DIR_ONLY_SPONSOR, 'onlySponsor'))
+  .on('unlink', () => readSponsorLogos(LOGO_DIR_ONLY_SPONSOR, 'onlySponsor'))
+  .on('change', () => readSponsorLogos(LOGO_DIR_ONLY_SPONSOR, 'onlySponsor'));
 
 app.get('/api/logos', (req, res) => {
   try {
@@ -644,8 +643,8 @@ app.get('/api/logos', (req, res) => {
     const teamType = config.teamType || 'herren1';
 
     // Wähle den richtigen Ordner basierend auf teamType
-    const logoDir = teamType === 'damen1' ? LOGO_DIR_DAMEN1 : LOGO_DIR;
-    const logoPathPrefix = teamType === 'damen1' ? '/assets/logos_damen1' : '/assets/logos';
+    const logoDir = teamType === 'onlySponsor' ? LOGO_DIR_ONLY_SPONSOR : LOGO_DIR;
+    const logoPathPrefix = teamType === 'onlySponsor' ? '/assets/logos_onlySponsor' : '/assets/logos';
 
     // Read, filter and sort logos deterministically (natural filename order)
     const entries = fs.readdirSync(logoDir)
@@ -833,7 +832,6 @@ app.get('/api/score', (req, res) => {
 
 app.get('/api/club-logo', (req, res) => {
   try {
-    // Lade das erste Logo im club_logo Ordner
     const files = fs.readdirSync(CLUB_LOGO_DIR)
       .filter(f => /\.(png|jpe?g|gif|svg|webp)$/i.test(f))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
@@ -1552,16 +1550,16 @@ async function fetchOnce() {
     return;
   }
 
-  // Prüfe ob Fetcher für "damen1" deaktiviert werden soll
+  // Prüfe ob Fetcher für "onlySponsor" deaktiviert werden soll
   const config = readJSON(CONFIG_FILE, {});
   const teamType = config.teamType || 'herren1';
-  if (teamType === 'damen1') {
+  if (teamType === 'onlySponsor') {
     // Stelle sicher, dass fetchLock nicht gesetzt bleibt, falls es bereits true war
     // (kann passieren wenn teamType während eines laufenden Fetches geändert wird)
     if (fetchLock) {
       fetchLock = false;
     }
-    return; // Keine Datenabfrage bei "damen1"
+    return; // Keine Datenabfrage bei "onlySponsor"
   }
 
   fetchLock = true;
@@ -2176,9 +2174,9 @@ function startFetcher() {
   const config = readJSON(CONFIG_FILE, {});
   const teamType = config.teamType || 'herren1';
 
-  // Bei "damen1" wird kein Fetcher benötigt, da der Spielstand nicht angezeigt wird
-  if (teamType === 'damen1') {
-    console.log('[ticker] disabled (damen1 - no score display)');
+  // Bei "onlySponsor" wird kein Fetcher benötigt, da der Spielstand nicht angezeigt wird
+  if (teamType === 'onlySponsor') {
+    console.log('[ticker] disabled (onlySponsor - no score display)');
     return;
   }
 
