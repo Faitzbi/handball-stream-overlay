@@ -106,5 +106,12 @@ logs
 tmp/
 temp/
 
-# Debug dumps
+# Runtime state – wird in der App (Admin) lokal geändert.
+# Nicht versionieren, sonst blockiert git pull / entstehen Konflikte
+# zwischen Hallen-PCs und deinem Rechner.
+data/score.json
+data/config.json
 data/debug/
+
+# Running server PID (scripts/starten.*)
+.server.pid
