@@ -24,7 +24,7 @@ git rev-parse @{u} >nul 2>&1
 if errorlevel 1 (
   echo Branch: %BRANCH%
   echo Kein Upstream-Branch gesetzt.
-  pause
+  timeout /t 3 /nobreak >nul
   exit /b 0
 )
 
@@ -43,5 +43,5 @@ if "%LOCAL%"=="%REMOTE%" (
   echo Zum Aktualisieren: aktualisieren.bat
 )
 
-echo.
-pause
+timeout /t 3 /nobreak >nul
+exit /b 0

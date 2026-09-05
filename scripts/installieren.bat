@@ -29,5 +29,5 @@ echo.
 echo Fertig. Server starten mit: starten.bat
 echo   Overlay: http://localhost:3000/overlay
 echo   Admin:   http://localhost:3000/admin
-echo.
-pause
+timeout /t 2 /nobreak >nul
+exit /b 0

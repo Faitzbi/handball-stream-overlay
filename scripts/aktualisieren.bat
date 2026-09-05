@@ -36,5 +36,5 @@ if errorlevel 1 (
 
 echo.
 echo Fertig. Server neu starten mit: starten.bat
-echo.
-pause
+timeout /t 2 /nobreak >nul
+exit /b 0

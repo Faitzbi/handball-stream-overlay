@@ -58,13 +58,13 @@ Dann Abhängigkeiten installieren:
 
 | Aktion | Windows | macOS / Linux |
 |--------|---------|---------------|
-| Server starten | `starten.bat` | `./scripts/starten.sh` |
+| Server starten (öffnet Browser) | `starten.bat` | `./scripts/starten.sh` |
 | Server stoppen | `stoppen.bat` | `./scripts/stoppen.sh` |
 | Updates holen | `aktualisieren.bat` | `./scripts/aktualisieren.sh` |
 | Prüfen ob Updates da sind | `status.bat` | `./scripts/status.sh` |
 
 Nach einem Update: zuerst **stoppen**, dann **aktualisieren**, danach wieder **starten**.  
-(Alternativ: Fenster mit dem laufenden Server schließen bzw. Ctrl+C.)
+`starten` lässt den Server im Hintergrund laufen und schließt das Skript-Fenster danach; beenden nur noch mit **stoppen**.
 
 Alternativ im Terminal:
 

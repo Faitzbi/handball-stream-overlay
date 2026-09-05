@@ -27,5 +27,5 @@ if "%STOPPED%"=="1" (
   echo Kein laufender Overlay-Server gefunden.
 )
 
-echo.
-pause
+timeout /t 2 /nobreak >nul
+exit /b 0

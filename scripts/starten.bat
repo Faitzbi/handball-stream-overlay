@@ -2,6 +2,9 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0.."
 
+set OVERLAY_URL=http://localhost:3000/overlay
+set ADMIN_URL=http://localhost:3000/admin
+
 where node >nul 2>&1
 if errorlevel 1 (
   echo Fehler: Node.js ist nicht installiert oder nicht im PATH.
@@ -21,21 +24,23 @@ if exist ".server.pid" (
   tasklist /FI "PID eq !OLD_PID!" 2>nul | find "!OLD_PID!" >nul
   if not errorlevel 1 (
     echo Server laeuft bereits ^(PID !OLD_PID!^).
-    echo Zum Beenden: stoppen.bat
-    pause
-    exit /b 1
+    echo ==^> Oeffne Browser ...
+    start "" "!OVERLAY_URL!"
+    start "" "!ADMIN_URL!"
+    timeout /t 2 /nobreak >nul
+    exit /b 0
   )
   del /f /q ".server.pid" >nul 2>&1
 )
 
 echo ==^> Starte Overlay-Server ...
-echo   Overlay: http://localhost:3000/overlay
-echo   Admin:   http://localhost:3000/admin
-echo   Beenden: Ctrl+C oder stoppen.bat
+echo   Overlay: %OVERLAY_URL%
+echo   Admin:   %ADMIN_URL%
+echo   Beenden: stoppen.bat
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$p = Start-Process -FilePath 'node' -ArgumentList 'server.js' -PassThru -NoNewWindow; Set-Content -Path '.server.pid' -Value $p.Id -NoNewline; try { Wait-Process -Id $p.Id } finally { if (Test-Path '.server.pid') { Remove-Item '.server.pid' -Force -ErrorAction SilentlyContinue } }"
+  "$overlay='http://localhost:3000/overlay'; $admin='http://localhost:3000/admin'; $p = Start-Process -FilePath 'node' -ArgumentList 'server.js' -PassThru -WindowStyle Hidden; Set-Content -Path '.server.pid' -Value $p.Id -NoNewline; for($i=0; $i -lt 30; $i++){ try { Invoke-WebRequest -Uri $overlay -UseBasicParsing -TimeoutSec 1 | Out-Null; break } catch { Start-Sleep -Milliseconds 200 } }; Write-Host ('Server laeuft (PID ' + $p.Id + ').'); Write-Host '==> Oeffne Browser ...'; Start-Process $overlay; Start-Process $admin"
 
-echo.
-pause
+timeout /t 2 /nobreak >nul
+exit /b 0
