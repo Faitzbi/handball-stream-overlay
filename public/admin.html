@@ -395,6 +395,191 @@
       font-size: 0.9rem;
       margin-top: 0.75rem;
     }
+    .media-help {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1.25rem;
+      color: var(--text-secondary);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+    .media-help code {
+      font-size: 0.85em;
+      background: #eef2f7;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+    .media-section {
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .media-section:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+    .media-section h3 {
+      font-size: 1.05rem;
+      margin: 0 0 0.5rem;
+      color: var(--text-primary);
+    }
+    .media-upload-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-end;
+      margin: 0.75rem 0;
+    }
+    .media-upload-row .form-group {
+      margin: 0;
+      flex: 1 1 180px;
+    }
+    .asset-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .asset-item {
+      width: 96px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.4rem;
+      text-align: center;
+    }
+    .asset-item img {
+      width: 100%;
+      height: 64px;
+      object-fit: contain;
+      background: #fff;
+      border-radius: 4px;
+    }
+    .asset-item .asset-name {
+      display: block;
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      margin: 0.35rem 0;
+      word-break: break-all;
+      line-height: 1.2;
+      max-height: 2.4em;
+      overflow: hidden;
+    }
+    .asset-item .btn-delete-asset {
+      border: none;
+      background: #fee2e2;
+      color: #b91c1c;
+      border-radius: 4px;
+      padding: 0.2rem 0.45rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .asset-item .btn-delete-asset:hover {
+      background: #fecaca;
+    }
+    .asset-empty {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+    .player-help {
+      margin: 0.35rem 0 0.85rem;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+    .player-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.85rem;
+    }
+    .player-card {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 0.85rem;
+      align-items: center;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem;
+    }
+    .player-card.is-new {
+      border-style: dashed;
+      background: #fff;
+    }
+    .player-photo-wrap {
+      position: relative;
+      width: 88px;
+      height: 88px;
+    }
+    .player-photo-wrap img {
+      width: 88px;
+      height: 88px;
+      object-fit: cover;
+      border-radius: 8px;
+      background: #e2e8f0;
+      display: block;
+    }
+    .player-photo-wrap .player-photo-btn {
+      position: absolute;
+      inset: 0;
+      border: none;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.45);
+      color: #fff;
+      font-size: 0.75rem;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+    .player-photo-wrap:hover .player-photo-btn,
+    .player-photo-wrap:focus-within .player-photo-btn {
+      opacity: 1;
+    }
+    .player-card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      min-width: 0;
+    }
+    .player-card-body input[type="text"] {
+      width: 100%;
+      margin: 0;
+    }
+    .player-file-hint {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+    }
+    .player-file-hint.invalid {
+      color: #b91c1c;
+    }
+    .player-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+    }
+    .player-card-actions .btn {
+      padding: 0.4rem 0.7rem;
+      font-size: 0.85rem;
+    }
+    .btn-danger-soft {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: none;
+    }
+    .btn-danger-soft:hover {
+      background: #fecaca;
+    }
+    .btn-secondary {
+      background: #e2e8f0;
+      color: #1e293b;
+      border: none;
+    }
+    .btn-secondary:hover {
+      background: #cbd5e1;
+    }
 
     @media (max-width: 768px) {
       body {
@@ -407,6 +592,10 @@
       
       .form-row,
       .form-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .player-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -438,13 +627,13 @@
       <div class="form-group">
         <label for="scheduleUrl"><i class="fas fa-users"></i> Team-URL (handball.net)</label>
         <input id="scheduleUrl" type="text" placeholder="https://handball.net/team/86496"/>
-        <small>Nach dem Speichern: nächste Spiele laden und eines auswählen.</small>
+        <small>Team-URL eintragen, dann „Nächste Spiele laden“ – die URL wird dabei automatisch gespeichert.</small>
       </div>
       <div class="form-group">
         <button type="button" id="loadUpcoming" class="btn btn-primary">
           <i class="fas fa-sync-alt"></i> Nächste Spiele laden
         </button>
-        <span id="scheduleLoadHint" style="margin-left: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">Bitte zuerst Team-URL speichern.</span>
+        <span id="scheduleLoadHint" style="margin-left: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">Bitte zuerst eine Team-URL eintragen.</span>
       </div>
       <div id="upcomingGames" class="upcoming-games" style="display: none;">
         <p style="margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.95rem;">Nächste Spiele – Klick wählt das Match und speichert es sofort:</p>
@@ -472,7 +661,51 @@
       <button id="saveCfg" class="btn btn-primary">
         <i class="fas fa-save"></i> Konfiguration speichern
       </button>
-      <p class="hint-compact"><i class="fas fa-images"></i> Sponsoren-Logos einfach nach <code>/assets/logos</code> legen (PNG/JPG/WEBP/SVG).</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <i class="fas fa-images"></i>
+        <h2>Sponsoren &amp; Spieler</h2>
+      </div>
+      <div class="media-help">
+        <strong>Kurz:</strong> Sponsoren hier hochladen oder manuell nach <code>assets/logos</code> /
+        <code>assets/logos_onlySponsor</code> legen.
+        Spieler unten verwalten (oder Dateien in <code>assets/players</code>).
+      </div>
+
+      <div class="media-section">
+        <h3><i class="fas fa-handshake"></i> Sponsoren-Logos</h3>
+        <small>PNG, JPG, WEBP, SVG, GIF – erscheinen im Overlay-Karussell.</small>
+        <div class="media-upload-row">
+          <div class="form-group">
+            <label for="sponsorUploadTarget">Zielordner</label>
+            <select id="sponsorUploadTarget">
+              <option value="sponsors">Score / Teams (assets/logos)</option>
+              <option value="sponsorsOnly">Nur Sponsoren (assets/logos_onlySponsor)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="sponsorFileInput">Datei wählen</label>
+            <input id="sponsorFileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" />
+          </div>
+          <button type="button" id="uploadSponsorBtn" class="btn btn-primary">
+            <i class="fas fa-upload"></i> Hochladen
+          </button>
+        </div>
+        <div id="sponsorAssetList" class="asset-list"></div>
+      </div>
+
+      <div class="media-section">
+        <h3><i class="fas fa-users"></i> Spielerverwaltung</h3>
+        <p class="player-help">
+          Pro Spieler: Foto links, Name rechts.
+          Name im Format <strong>Vorname Nachname</strong>
+          (z.&nbsp;B. <code>Max Mustermann</code> → Datei <code>max_mustermann.jpg</code>; ä→ae, ö→oe, ü→ue).
+          Muss zum Liveticker-Namen passen.
+        </p>
+        <div id="playerManager" class="player-grid"></div>
+      </div>
     </div>
 
     <details class="advanced-panel">

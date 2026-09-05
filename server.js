@@ -270,6 +270,7 @@ const PUBLIC_DIR = path.join(DIR, 'public');
 const ASSETS_DIR = path.join(DIR, 'assets');
 const LOGO_DIR = path.join(ASSETS_DIR, 'logos');
 const LOGO_DIR_ONLY_SPONSOR = path.join(ASSETS_DIR, 'logos_onlySponsor');
+const PLAYERS_DIR = path.join(ASSETS_DIR, 'players');
 const CLUB_LOGO_DIR = path.join(ASSETS_DIR, 'club_logo');
 const TEAM_DIR = path.join(ASSETS_DIR, 'teams');
 const DATA_DIR = path.join(DIR, 'data');
@@ -277,12 +278,18 @@ const DEBUG_DIR = path.join(DATA_DIR, 'debug');
 const SCORE_FILE = path.join(DATA_DIR, 'score.json');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
+const ASSET_UPLOAD_TYPES = {
+  sponsors: { dir: LOGO_DIR, urlPrefix: '/assets/logos', exts: /\.(png|jpe?g|gif|svg|webp)$/i },
+  sponsorsOnly: { dir: LOGO_DIR_ONLY_SPONSOR, urlPrefix: '/assets/logos_onlySponsor', exts: /\.(png|jpe?g|gif|svg|webp)$/i },
+  players: { dir: PLAYERS_DIR, urlPrefix: '/assets/players', exts: /\.(png|jpe?g|webp)$/i }
+};
+
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '12mb' }));
 app.use('/public', express.static(PUBLIC_DIR));
 app.use('/assets', express.static(ASSETS_DIR));
 
-for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, LOGO_DIR_ONLY_SPONSOR, CLUB_LOGO_DIR, TEAM_DIR, DATA_DIR, DEBUG_DIR]) {
+for (const d of [PUBLIC_DIR, ASSETS_DIR, LOGO_DIR, LOGO_DIR_ONLY_SPONSOR, PLAYERS_DIR, CLUB_LOGO_DIR, TEAM_DIR, DATA_DIR, DEBUG_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({
@@ -346,6 +353,293 @@ app.get('/api/logos', (req, res) => {
   } catch (e) {
     console.error('[logos] Error listing logos:', e.message);
     res.json({ logos: [] });
+  }
+});
+
+function sanitizeAssetFilename(name, allowedExts) {
+  const base = path.basename(String(name || '')).trim();
+  if (!base || base === '.' || base === '..') return null;
+  if (!allowedExts.test(base)) return null;
+  if (/[\\/]/.test(base)) return null;
+  return base;
+}
+
+function normalizePlayerBasename(playerName) {
+  return String(playerName || '')
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/[\s-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+function filenameToDisplayName(filename) {
+  return path.parse(String(filename || '')).name
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+function validatePlayerDisplayName(name) {
+  const displayName = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!displayName) return { ok: false, error: 'Name fehlt' };
+  const parts = displayName.split(' ');
+  if (parts.length < 2) {
+    return { ok: false, error: 'Format: Vorname Nachname (mind. zwei Wörter)' };
+  }
+  if (!/^[\p{L}][\p{L}'\-.]*(?:\s+[\p{L}][\p{L}'\-.]*)+$/u.test(displayName)) {
+    return { ok: false, error: 'Nur Buchstaben, Leerzeichen, Bindestrich/Apostroph' };
+  }
+  const basename = normalizePlayerBasename(displayName);
+  if (!basename || !basename.includes('_')) {
+    return { ok: false, error: 'Name ergibt keinen gültigen Dateinamen' };
+  }
+  return { ok: true, displayName, basename };
+}
+
+function parseImageDataUrl(dataUrl) {
+  const m = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+  if (!m) return { error: 'Ungültige Bilddaten (Base64 erwartet)' };
+  const mime = m[1].toLowerCase();
+  const buf = Buffer.from(m[2], 'base64');
+  if (!buf.length) return { error: 'Leere Datei' };
+  if (buf.length > 8 * 1024 * 1024) return { error: 'Datei zu groß (max. 8 MB)' };
+  const ext = mime.includes('png') ? '.png'
+    : mime.includes('webp') ? '.webp'
+    : mime.includes('jpeg') || mime.includes('jpg') ? '.jpg'
+    : null;
+  if (!ext) return { error: 'Nur JPG, PNG oder WEBP erlaubt' };
+  return { buf, mime, ext };
+}
+
+function safePlayerPath(filename) {
+  const clean = sanitizeAssetFilename(filename, ASSET_UPLOAD_TYPES.players.exts);
+  if (!clean) return null;
+  const dest = path.resolve(PLAYERS_DIR, clean);
+  const root = path.resolve(PLAYERS_DIR) + path.sep;
+  if (!dest.startsWith(root)) return null;
+  return { filename: clean, dest };
+}
+
+function listPlayers() {
+  if (!fs.existsSync(PLAYERS_DIR)) return [];
+  return fs.readdirSync(PLAYERS_DIR)
+    .filter((f) => ASSET_UPLOAD_TYPES.players.exts.test(f) && f !== 'README.md')
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map((f) => ({
+      filename: f,
+      displayName: filenameToDisplayName(f),
+      basename: path.parse(f).name,
+      url: `/assets/players/${encodeURIComponent(f)}`
+    }));
+}
+
+app.get('/api/assets/list', (req, res) => {
+  const type = String(req.query.type || '');
+  const meta = ASSET_UPLOAD_TYPES[type];
+  if (!meta) return res.status(400).json({ error: 'Ungültiger Typ (sponsors|sponsorsOnly|players)' });
+  try {
+    if (!fs.existsSync(meta.dir)) return res.json({ files: [] });
+    const files = fs.readdirSync(meta.dir)
+      .filter(f => meta.exts.test(f) && f !== 'README.md')
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+      .map(f => ({
+        name: f,
+        url: `${meta.urlPrefix}/${encodeURIComponent(f)}`
+      }));
+    res.json({ files });
+  } catch (e) {
+    console.error('[assets] list error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/assets/upload', (req, res) => {
+  try {
+    const type = String(req.body?.type || '');
+    const meta = ASSET_UPLOAD_TYPES[type];
+    if (!meta) return res.status(400).json({ error: 'Ungültiger Typ' });
+
+    const dataUrl = String(req.body?.dataBase64 || '');
+    const m = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!m) return res.status(400).json({ error: 'Ungültige Bilddaten (Base64 erwartet)' });
+    const mime = m[1].toLowerCase();
+    const buf = Buffer.from(m[2], 'base64');
+    if (!buf.length) return res.status(400).json({ error: 'Leere Datei' });
+    if (buf.length > 8 * 1024 * 1024) return res.status(400).json({ error: 'Datei zu groß (max. 8 MB)' });
+
+    let filename = sanitizeAssetFilename(req.body?.filename, meta.exts);
+    if (type === 'players') {
+      const fromName = normalizePlayerBasename(req.body?.playerName || '');
+      const extFromMime = mime.includes('png') ? '.png'
+        : mime.includes('webp') ? '.webp'
+        : '.jpg';
+      const base = fromName || (filename ? path.parse(filename).name : '');
+      if (!base) return res.status(400).json({ error: 'Spielername fehlt (z. B. Max Mustermann)' });
+      filename = sanitizeAssetFilename(base + extFromMime, meta.exts);
+    }
+    if (!filename) return res.status(400).json({ error: 'Ungültiger Dateiname / Format' });
+
+    if (!fs.existsSync(meta.dir)) fs.mkdirSync(meta.dir, { recursive: true });
+    const dest = path.join(meta.dir, filename);
+    if (!dest.startsWith(meta.dir + path.sep)) {
+      return res.status(400).json({ error: 'Ungültiger Pfad' });
+    }
+    fs.writeFileSync(dest, buf);
+    console.log(`[assets] uploaded ${type}/${filename} (${buf.length} bytes)`);
+    res.json({
+      ok: true,
+      name: filename,
+      url: `${meta.urlPrefix}/${encodeURIComponent(filename)}`
+    });
+  } catch (e) {
+    console.error('[assets] upload error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/assets/:type/:filename', (req, res) => {
+  try {
+    const type = String(req.params.type || '');
+    const meta = ASSET_UPLOAD_TYPES[type];
+    if (!meta) return res.status(400).json({ error: 'Ungültiger Typ' });
+    const filename = sanitizeAssetFilename(req.params.filename, meta.exts);
+    if (!filename) return res.status(400).json({ error: 'Ungültiger Dateiname' });
+    const dest = path.join(meta.dir, filename);
+    if (!dest.startsWith(meta.dir + path.sep)) {
+      return res.status(400).json({ error: 'Ungültiger Pfad' });
+    }
+    if (!fs.existsSync(dest)) return res.status(404).json({ error: 'Datei nicht gefunden' });
+    fs.unlinkSync(dest);
+    console.log(`[assets] deleted ${type}/${filename}`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[assets] delete error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/players', (_req, res) => {
+  try {
+    res.json({ players: listPlayers() });
+  } catch (e) {
+    console.error('[players] list error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/players', (req, res) => {
+  try {
+    const validated = validatePlayerDisplayName(req.body?.playerName);
+    if (!validated.ok) return res.status(400).json({ error: validated.error });
+
+    const image = parseImageDataUrl(req.body?.dataBase64);
+    if (image.error) return res.status(400).json({ error: image.error });
+
+    if (!fs.existsSync(PLAYERS_DIR)) fs.mkdirSync(PLAYERS_DIR, { recursive: true });
+    const filename = `${validated.basename}${image.ext}`;
+    const target = safePlayerPath(filename);
+    if (!target) return res.status(400).json({ error: 'Ungültiger Dateiname' });
+    if (fs.existsSync(target.dest)) {
+      return res.status(409).json({ error: `Spieler existiert bereits (${filename})` });
+    }
+
+    fs.writeFileSync(target.dest, image.buf);
+    console.log(`[players] created ${filename}`);
+    res.json({
+      ok: true,
+      player: {
+        filename,
+        displayName: validated.displayName,
+        basename: validated.basename,
+        url: `/assets/players/${encodeURIComponent(filename)}`
+      }
+    });
+  } catch (e) {
+    console.error('[players] create error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/players/:filename', (req, res) => {
+  try {
+    const current = safePlayerPath(req.params.filename);
+    if (!current || !fs.existsSync(current.dest)) {
+      return res.status(404).json({ error: 'Spieler nicht gefunden' });
+    }
+
+    const hasName = Object.prototype.hasOwnProperty.call(req.body || {}, 'playerName');
+    const hasImage = Boolean(req.body?.dataBase64);
+    if (!hasName && !hasImage) {
+      return res.status(400).json({ error: 'Kein Name und kein Bild zum Speichern' });
+    }
+
+    let displayName = filenameToDisplayName(current.filename);
+    let basename = path.parse(current.filename).name;
+    let ext = path.parse(current.filename).ext.toLowerCase();
+    let buf = null;
+
+    if (hasName) {
+      const validated = validatePlayerDisplayName(req.body.playerName);
+      if (!validated.ok) return res.status(400).json({ error: validated.error });
+      displayName = validated.displayName;
+      basename = validated.basename;
+    }
+
+    if (hasImage) {
+      const image = parseImageDataUrl(req.body.dataBase64);
+      if (image.error) return res.status(400).json({ error: image.error });
+      buf = image.buf;
+      ext = image.ext;
+    }
+
+    const nextFilename = `${basename}${ext}`;
+    const next = safePlayerPath(nextFilename);
+    if (!next) return res.status(400).json({ error: 'Ungültiger Dateiname' });
+
+    if (next.filename !== current.filename && fs.existsSync(next.dest)) {
+      return res.status(409).json({ error: `Zielname existiert bereits (${nextFilename})` });
+    }
+
+    if (buf) {
+      fs.writeFileSync(next.dest, buf);
+      if (next.filename !== current.filename) fs.unlinkSync(current.dest);
+    } else if (next.filename !== current.filename) {
+      fs.renameSync(current.dest, next.dest);
+    }
+
+    console.log(`[players] updated ${current.filename} -> ${next.filename}`);
+    res.json({
+      ok: true,
+      player: {
+        filename: next.filename,
+        displayName,
+        basename,
+        url: `/assets/players/${encodeURIComponent(next.filename)}`
+      }
+    });
+  } catch (e) {
+    console.error('[players] update error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/players/:filename', (req, res) => {
+  try {
+    const target = safePlayerPath(req.params.filename);
+    if (!target) return res.status(400).json({ error: 'Ungültiger Dateiname' });
+    if (!fs.existsSync(target.dest)) return res.status(404).json({ error: 'Spieler nicht gefunden' });
+    fs.unlinkSync(target.dest);
+    console.log(`[players] deleted ${target.filename}`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[players] delete error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

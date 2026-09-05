@@ -904,18 +904,24 @@ function loadPlayerImage(playerName, playerImageEl, photoUrl) {
     setPlaceholderAvatar(playerImageEl);
     return;
   }
-  var imageFileName = generateImageFileName(playerName);
-  var imagePath = "/assets/players/" + imageFileName;
-  var img = new Image();
-  img.onload = function () {
-    playerImageEl.src = imagePath;
-    playerImageEl.style.display = "block";
-    playerImageEl.classList.remove("placeholder-avatar");
-  };
-  img.onerror = function () {
-    setPlaceholderAvatar(playerImageEl);
-  };
-  img.src = imagePath;
+  var exts = ['.jpg', '.jpeg', '.png', '.webp'];
+  var tryAt = 0;
+  function tryNext() {
+    if (tryAt >= exts.length) {
+      setPlaceholderAvatar(playerImageEl);
+      return;
+    }
+    var imagePath = "/assets/players/" + generateImageFileName(playerName, exts[tryAt++]);
+    var img = new Image();
+    img.onload = function () {
+      playerImageEl.src = imagePath;
+      playerImageEl.style.display = "block";
+      playerImageEl.classList.remove("placeholder-avatar");
+    };
+    img.onerror = tryNext;
+    img.src = imagePath;
+  }
+  tryNext();
 }
 
 /* Spieler-Tor-Anzeige (ruft showEventPopup mit Goal/SevenMeterGoal auf) */
@@ -1199,17 +1205,18 @@ function extractPlayerNameFromEventMessage(message) {
   return name;
 }
 
-function generateImageFileName(playerName) {
+function generateImageFileName(playerName, ext) {
   // Konvertiere Spielername zu Dateiname
   // Beispiel: "Max Mustermann" -> "max_mustermann.jpg"
-  return playerName
+  var base = playerName
     .toLowerCase()
     .replace(/ä/g, 'ae')
     .replace(/ö/g, 'oe')
     .replace(/ü/g, 'ue')
     .replace(/ß/g, 'ss')
     .replace(/[^a-z0-9\s]/g, '')
-    .replace(/\s+/g, '_') + '.jpg';
+    .replace(/\s+/g, '_');
+  return base + (ext || '.jpg');
 }
 
 /* Alte Update-Funktionen entfernt - werden durch Stabilitäts-Buffer ersetzt */
