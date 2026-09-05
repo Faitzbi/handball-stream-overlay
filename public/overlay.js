@@ -343,11 +343,44 @@ function setIf(el, v, f) {
 }
 function setLogo(el, url) {
   if (!el) return;
-  if (url && url.length) {
+  var placeholder = "/public/team-placeholder.svg";
+  var apply = function (src, isPlaceholder) {
+    el.onerror = null;
+    el.onload = null;
+    el.src = src;
+    el.style.display = "inline-block";
+    el.classList.toggle("team-logo-placeholder", !!isPlaceholder);
+  };
+  if (url && String(url).trim().length) {
+    el.classList.remove("team-logo-placeholder");
+    el.onerror = function () {
+      apply(placeholder, true);
+    };
+    el.onload = function () {
+      el.classList.remove("team-logo-placeholder");
+    };
     el.src = url;
     el.style.display = "inline-block";
   } else {
-    el.style.display = "none";
+    apply(placeholder, true);
+  }
+}
+
+function setPopupLogo(el, url) {
+  if (!el) return;
+  var placeholder = "/public/team-placeholder.svg";
+  if (url && String(url).trim().length) {
+    el.onerror = function () {
+      el.onerror = null;
+      el.src = placeholder;
+      el.style.display = "";
+    };
+    el.src = url;
+    el.style.display = "";
+  } else {
+    el.onerror = null;
+    el.src = placeholder;
+    el.style.display = "";
   }
 }
 
@@ -637,7 +670,7 @@ function refreshScore() {
               if (scoreMain) scoreMain.classList.add('scored-home');
               if (homeNumEl) homeNumEl.classList.add('scored-home');
               if (shouldShowPlayerGoal) {
-                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer, photoUrl: s.lastEventPhotoUrl || "" }, eventSide);
                 lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             } else if (isAwayGoal) {
@@ -645,13 +678,13 @@ function refreshScore() {
               if (scoreMain) scoreMain.classList.add('scored-away');
               if (awayNumEl) awayNumEl.classList.add('scored-away');
               if (shouldShowPlayerGoal) {
-                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer, photoUrl: s.lastEventPhotoUrl || "" }, eventSide);
                 lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             } else {
               broadcastBar.classList.add("goal-animation");
               if (shouldShowPlayerGoal) {
-                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer }, eventSide);
+                showEventPopup({ message: s.lastEvent || "", eventType: goalEventType, playerName: s.lastScorer, photoUrl: s.lastEventPhotoUrl || "" }, eventSide);
                 lastShownEventKey = (s.lastEvent || "") + "|" + lastType;
               }
             }
@@ -690,7 +723,7 @@ function refreshScore() {
         var awayTeamName = (s.awayTeam && typeof s.awayTeam === "string") ? s.awayTeam.trim() : "";
         var eventSide = homeTeamName && newEvent.indexOf(homeTeamName) !== -1 ? "left" : (awayTeamName && newEvent.indexOf(awayTeamName) !== -1 ? "right" : "left");
         if (isCardPopupType && eventKey !== lastShownEventKey && eventIsForOurTeam(s, newEvent)) {
-          showEventPopup({ message: newEvent || "", eventType: eventType, playerName: "" }, eventSide);
+          showEventPopup({ message: newEvent || "", eventType: eventType, playerName: "", photoUrl: s.lastEventPhotoUrl || "" }, eventSide);
           lastShownEventKey = eventKey;
         }
       }
@@ -826,7 +859,7 @@ function showEventPopup(options, side) {
   }
   if (playerImageContainer) {
     playerImageContainer.style.display = "";
-    loadPlayerImage(playerName, playerImageEl);
+    loadPlayerImage(playerName, playerImageEl, options.photoUrl || "");
   }
 
   playerDisplay.classList.remove("hidden");
@@ -852,8 +885,21 @@ function setPlaceholderAvatar(playerImageEl) {
   playerImageEl.classList.add("placeholder-avatar");
 }
 
-function loadPlayerImage(playerName, playerImageEl) {
+function loadPlayerImage(playerName, playerImageEl, photoUrl) {
   if (!playerImageEl) return;
+  if (photoUrl && /^https?:\/\//i.test(String(photoUrl))) {
+    var remote = new Image();
+    remote.onload = function () {
+      playerImageEl.src = photoUrl;
+      playerImageEl.style.display = "block";
+      playerImageEl.classList.remove("placeholder-avatar");
+    };
+    remote.onerror = function () {
+      loadPlayerImage(playerName, playerImageEl, null);
+    };
+    remote.src = photoUrl;
+    return;
+  }
   if (!playerName) {
     setPlaceholderAvatar(playerImageEl);
     return;
@@ -931,29 +977,11 @@ function showTimeoutPopup(payload, eventKey) {
   var homeHeadingLogo = $("#timeout-scorers-home-logo");
   var awayHeadingLogo = $("#timeout-scorers-away-logo");
 
-  if (homeHeadingLogo) {
-    if (payload.homeLogoUrl) {
-      homeHeadingLogo.src = payload.homeLogoUrl;
-      homeHeadingLogo.style.display = "";
-    } else {
-      homeHeadingLogo.style.display = "none";
-    }
-  }
-  if (awayHeadingLogo) {
-    if (payload.awayLogoUrl) {
-      awayHeadingLogo.src = payload.awayLogoUrl;
-      awayHeadingLogo.style.display = "";
-    } else {
-      awayHeadingLogo.style.display = "none";
-    }
-  }
+  if (homeHeadingLogo) setPopupLogo(homeHeadingLogo, payload.homeLogoUrl || "");
+  if (awayHeadingLogo) setPopupLogo(awayHeadingLogo, payload.awayLogoUrl || "");
 
-  if (teamLogoEl && payload.teamLogoUrl) {
-    teamLogoEl.src = payload.teamLogoUrl;
-    teamLogoEl.style.display = "block";
-  } else if (teamLogoEl) {
-    teamLogoEl.style.display = "none";
-  }
+  if (teamLogoEl) setPopupLogo(teamLogoEl, payload.teamLogoUrl || "");
+  if (teamLogoEl) teamLogoEl.style.display = "block";
 
   var sponsorUrl = (sponsorUrls.length && sponsorUrls[currentSponsorIndex]) ? sponsorUrls[currentSponsorIndex] : "";
   if (sponsorLogoEl) {
@@ -1074,22 +1102,8 @@ function showHalftimePopup(payload, eventKey) {
 
   var homeLogoEl = $("#halftime-home-logo");
   var awayLogoEl = $("#halftime-away-logo");
-  if (homeLogoEl) {
-    if (payload.homeLogoUrl) {
-      homeLogoEl.src = payload.homeLogoUrl;
-      homeLogoEl.style.display = "";
-    } else {
-      homeLogoEl.style.display = "none";
-    }
-  }
-  if (awayLogoEl) {
-    if (payload.awayLogoUrl) {
-      awayLogoEl.src = payload.awayLogoUrl;
-      awayLogoEl.style.display = "";
-    } else {
-      awayLogoEl.style.display = "none";
-    }
-  }
+  if (homeLogoEl) setPopupLogo(homeLogoEl, payload.homeLogoUrl || "");
+  if (awayLogoEl) setPopupLogo(awayLogoEl, payload.awayLogoUrl || "");
 
   function numVal(v) {
     return typeof v === "number" ? v : (parseInt(v, 10) || 0);

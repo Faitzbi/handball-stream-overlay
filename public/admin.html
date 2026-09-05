@@ -315,6 +315,86 @@
       font-size: 0.8rem;
       margin-top: 0.25rem;
     }
+    .upcoming-game-item.selected {
+      border-color: var(--success);
+      background: rgba(16, 185, 129, 0.15);
+      box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.35);
+    }
+    .upcoming-game-item.selected small {
+      color: #6ee7b7;
+    }
+    .selected-match-panel {
+      margin-top: 1rem;
+      padding: 1rem 1.15rem;
+      border-radius: var(--radius);
+      border: 1px solid rgba(16, 185, 129, 0.45);
+      background: rgba(16, 185, 129, 0.12);
+    }
+    .selected-match-label {
+      color: #6ee7b7;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .selected-match-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .selected-match-meta {
+      display: block;
+      margin-top: 0.35rem;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      word-break: break-all;
+    }
+
+    details.advanced-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      margin-bottom: 2rem;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    details.advanced-panel > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 1.25rem 1.5rem;
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      user-select: none;
+    }
+    details.advanced-panel > summary::-webkit-details-marker { display: none; }
+    details.advanced-panel > summary::before {
+      content: "▸";
+      color: var(--primary);
+    }
+    details.advanced-panel[open] > summary::before { content: "▾"; }
+    details.advanced-panel[open] > summary {
+      color: var(--text-primary);
+      border-bottom: 1px solid var(--border);
+    }
+    details.advanced-panel .advanced-body { padding: 1.5rem; }
+    details.advanced-panel .advanced-body .card {
+      box-shadow: none;
+      margin-bottom: 1.25rem;
+    }
+    details.advanced-panel .advanced-body .card:hover { transform: none; }
+    .hint-compact {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      margin-top: 0.75rem;
+    }
 
     @media (max-width: 768px) {
       body {
@@ -336,246 +416,190 @@
   <div class="container">
     <div class="header">
       <h1><i class="fas fa-volleyball-ball"></i> Handball Overlay Admin</h1>
-      <p>Verwalte dein Handball-Stream-Overlay</p>
+      <p>Spieltag steuern – Overlay in OBS einbinden</p>
     </div>
 
     <div class="card">
       <div class="card-header">
-        <i class="fas fa-link"></i>
-        <h2>Verbindung & Konfiguration</h2>
+        <i class="fas fa-tv"></i>
+        <h2>Overlay</h2>
       </div>
-      
-      <div class="form-row">
-        <div class="form-group">
-          <label for="tickerUrl">
-            <i class="fas fa-rss"></i> Ticker-URL
-          </label>
-          <input id="tickerUrl" type="text" placeholder="https://www.handball.net/spiele/.../ticker"/>
-          <small>Nach dem Speichern läuft der Live-Fetcher automatisch (alle 2 Sekunden).</small>
-        </div>
-        <div class="form-group">
-          <label for="overlayLink">
-            <i class="fas fa-tv"></i> Overlay-Link
-          </label>
-          <div class="code-block" id="overlayLink">http://localhost:3000/overlay</div>
-          <small>Diesen Link als Browser Source in OBS verwenden.</small>
-        </div>
-      </div>
-
       <div class="form-group">
-        <label for="teamType">
-          <i class="fas fa-users"></i> Team-Typ
-        </label>
-        <select id="teamType">
-          <option value="herren1">Herren 1</option>
-          <option value="onlySponsor">Only Sponsor</option>
-        </select>
-        <small>Wähle zwischen normalem Overlay (Score/Teams) und dem OnlySponsor-Modus (nur Sponsoren).</small>
+        <label for="overlayLink"><i class="fas fa-link"></i> Overlay-Link (OBS Browser Source)</label>
+        <div class="code-block" id="overlayLink">http://localhost:3000/overlay</div>
       </div>
-
-      <div class="form-group">
-        <label for="ourTeamName">
-          <i class="fas fa-id-badge"></i> Unser Team (Vereinsname)
-        </label>
-        <input id="ourTeamName" type="text" placeholder="z. B. HSG Kastellaun/Simmern" />
-        <small>Name wie im Spielbericht. Nur wenn gesetzt: Event-Pop-ups (Tore, Karten) nur für dieses Team.</small>
-      </div>
-
-      <div class="form-grid">
-        <div class="form-group">
-          <label for="homeLogoUrl">
-            <i class="fas fa-home"></i> Home-Logo-URL (optional)
-          </label>
-          <input id="homeLogoUrl" type="text" placeholder="http(s):// oder leer lassen" />
-          <small>Wenn leer: versucht automatisch vom Ticker zu erkennen. Alternativ lokal: <code>/assets/teams/home.png</code></small>
-        </div>
-        <div class="form-group">
-          <label for="awayLogoUrl">
-            <i class="fas fa-plane"></i> Away-Logo-URL (optional)
-          </label>
-          <input id="awayLogoUrl" type="text" placeholder="http(s):// oder leer lassen" />
-          <small>Wenn leer: versucht automatisch vom Ticker zu erkennen. Alternativ lokal: <code>/assets/teams/away.png</code></small>
-        </div>
-      </div>
-      
-      <button id="saveCfg" class="btn btn-primary">
-        <i class="fas fa-save"></i> Konfiguration speichern
-      </button>
     </div>
 
     <div class="card">
       <div class="card-header">
         <i class="fas fa-calendar-alt"></i>
-        <h2>Spielplan & Ticker</h2>
+        <h2>Spielplan &amp; Match</h2>
       </div>
       <div class="form-group">
-        <label for="scheduleUrl">
-          <i class="fas fa-link"></i> Spielplan-Link (Mannschaft)
-        </label>
-        <input id="scheduleUrl" type="text" placeholder="https://www.handball.net/mannschaften/.../spielplan?dateFrom=...&dateTo=..."/>
-        <small>Spielplan-URL der Mannschaft von handball.net. Nach dem Speichern der Konfiguration kannst du die nächsten Spiele laden.</small>
+        <label for="scheduleUrl"><i class="fas fa-users"></i> Team-URL (handball.net)</label>
+        <input id="scheduleUrl" type="text" placeholder="https://handball.net/team/86496"/>
+        <small>Nach dem Speichern: nächste Spiele laden und eines auswählen.</small>
       </div>
       <div class="form-group">
         <button type="button" id="loadUpcoming" class="btn btn-primary">
           <i class="fas fa-sync-alt"></i> Nächste Spiele laden
         </button>
-        <span id="scheduleLoadHint" style="margin-left: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">Bitte zuerst Spielplan-Link eintragen und speichern.</span>
+        <span id="scheduleLoadHint" style="margin-left: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">Bitte zuerst Team-URL speichern.</span>
       </div>
       <div id="upcomingGames" class="upcoming-games" style="display: none;">
-        <p style="margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.95rem;">Nächste 3 Spiele (noch nicht beendet) – Klick setzt Ticker-URL und speichert:</p>
+        <p style="margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.95rem;">Nächste Spiele – Klick wählt das Match und speichert es sofort:</p>
         <div id="upcomingGamesList"></div>
       </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <i class="fas fa-edit"></i>
-        <h2>Manueller Score (Fallback/Test)</h2>
+      <div id="selectedMatchPanel" class="selected-match-panel" style="display: none;">
+        <div class="selected-match-label"><i class="fas fa-check-circle"></i> Aktives Match</div>
+        <div id="selectedMatchLabel" class="selected-match-title">—</div>
+        <small id="selectedMatchMeta" class="selected-match-meta"></small>
       </div>
-      
-      <div class="form-grid">
+      <div class="form-row" style="margin-top: 1.25rem;">
         <div class="form-group">
-          <label for="homeTeam">
-            <i class="fas fa-home"></i> Heimteam
-          </label>
-          <input id="homeTeam" type="text" value="Heim" />
+          <label for="ourTeamName"><i class="fas fa-id-badge"></i> Unser Team</label>
+          <input id="ourTeamName" type="text" placeholder="z. B. HSG Kastellaun/Simmern" />
+          <small>Optional: Pop-ups nur für dieses Team.</small>
         </div>
         <div class="form-group">
-          <label for="awayTeam">
-            <i class="fas fa-plane"></i> Gastteam
-          </label>
-          <input id="awayTeam" type="text" value="Gast" />
-        </div>
-        <div class="form-group">
-          <label for="homeGoals">
-            <i class="fas fa-futbol"></i> Heim Tore
-          </label>
-          <input id="homeGoals" type="text" value="0" />
-        </div>
-        <div class="form-group">
-          <label for="awayGoals">
-            <i class="fas fa-futbol"></i> Gast Tore
-          </label>
-          <input id="awayGoals" type="text" value="0" />
-        </div>
-        <div class="form-group">
-          <label for="clock">
-            <i class="fas fa-clock"></i> Spieluhr (MM:SS)
-          </label>
-          <input id="clock" type="text" value="00:00" />
-        </div>
-        <div class="form-group">
-          <label for="period">
-            <i class="fas fa-stopwatch"></i> Phase
-          </label>
-          <input id="period" type="text" value="1. Halbzeit" />
-        </div>
-        <div class="form-group">
-          <label for="lastScorer">
-            <i class="fas fa-star"></i> Letzter Torschütze
-          </label>
-          <input id="lastScorer" type="text" value="" />
+          <label for="teamType"><i class="fas fa-layer-group"></i> Anzeige-Modus</label>
+          <select id="teamType">
+            <option value="herren1">Score / Teams</option>
+            <option value="onlySponsor">Nur Sponsoren</option>
+          </select>
         </div>
       </div>
-      
-      <button id="saveScore" class="btn btn-success">
-        <i class="fas fa-save"></i> Score speichern
+      <button id="saveCfg" class="btn btn-primary">
+        <i class="fas fa-save"></i> Konfiguration speichern
       </button>
-      <small style="display: block; margin-top: 1rem; color: var(--text-secondary);">
-        <i class="fas fa-info-circle"></i> Nutze das bei Tests oder falls der Ticker mal ausfällt.
-      </small>
+      <p class="hint-compact"><i class="fas fa-images"></i> Sponsoren-Logos einfach nach <code>/assets/logos</code> legen (PNG/JPG/WEBP/SVG).</p>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <i class="fas fa-flask"></i>
-        <h2>Overlay-Events testen</h2>
-      </div>
-      <p style="margin-bottom: 1rem; color: var(--text-secondary);">
-        Löst im Overlay einmalig ein Event-Pop-up aus (Tor, Karten, 2 Min). Overlay-Seite muss geöffnet sein und pollt /api/score.
-      </p>
-      <div class="form-group">
-        <label>Optional: eigene Message (sonst Beispieltext)</label>
-        <input id="testEventMessage" type="text" placeholder="z. B. Max Mustermann (9.) (HSG XY) erhält eine 2-Minuten Strafe" style="width: 100%;" />
-      </div>
-      <div class="form-group">
-        <label>Optional: Spielername (für Tor/7m)</label>
-        <input id="testEventPlayer" type="text" placeholder="z. B. Max Mustermann" style="width: 100%;" />
-      </div>
-      <div class="test-event-buttons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
-        <button type="button" class="btn btn-primary btn-test-event" data-type="Goal" data-msg="59:28 - Tor durch Max Mustermann (9.) (HSG Kastellaun/Simmern)">
-          <i class="fas fa-futbol"></i> Tor
-        </button>
-        <button type="button" class="btn btn-primary btn-test-event" data-type="SevenMeterGoal" data-msg="51:36 - 7-Meter Tor durch Nico Becker (17.) (SG Zweibrücken)">
-          <i class="fas fa-bullseye"></i> 7m-Tor
-        </button>
-        <button type="button" class="btn btn-warning btn-test-event" data-type="Warning" data-msg="09:00 - Samuel Reitz (19.) (SG Zweibrücken) wurde verwarnt">
-          <i class="fas fa-id-card"></i> Gelbe Karte
-        </button>
-        <button type="button" class="btn btn-primary btn-test-event" data-type="TwoMinutePenalty" data-msg="55:57 - Kilian Kötz (9.) (HSG Kastellaun/Simmern) erhält eine 2-Minuten Strafe">
-          <i class="fas fa-clock"></i> 2 Minuten
-        </button>
-        <button type="button" class="btn btn-danger btn-test-event" data-type="Disqualification" data-msg="29:20 - Nils Wöschler (13.) (SG Zweibrücken) wurde disqualifiziert">
-          <i class="fas fa-id-card"></i> Rote Karte
-        </button>
-        <button type="button" class="btn btn-primary btn-test-event" data-type="BlueCard" data-msg="45:00 - Blaue Karte für Spieler (HSG Kastellaun/Simmern)">
-          <i class="fas fa-id-card"></i> Blaue Karte
-        </button>
-      </div>
-      <small style="display: block; margin-top: 1rem; color: var(--text-secondary);">
-        <i class="fas fa-info-circle"></i> Klick sendet das Event an den Server; das Overlay zeigt es beim nächsten Abruf von /api/score.
-      </small>
-    </div>
+    <details class="advanced-panel">
+      <summary><i class="fas fa-sliders-h"></i> Erweitert / Test</summary>
+      <div class="advanced-body">
+        <div class="card">
+          <div class="card-header">
+            <i class="fas fa-rss"></i>
+            <h2>Match-URL &amp; Logos</h2>
+          </div>
+          <div class="form-group">
+            <label for="tickerUrl"><i class="fas fa-link"></i> Match-URL (manuell)</label>
+            <input id="tickerUrl" type="text" placeholder="https://handball.net/match/501227"/>
+            <small>Wird normalerweise über „Nächste Spiele“ gesetzt. Live-Fetcher läuft nach dem Speichern.</small>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="homeLogoUrl"><i class="fas fa-home"></i> Home-Logo-URL</label>
+              <input id="homeLogoUrl" type="text" placeholder="optional – sonst automatisch" />
+            </div>
+            <div class="form-group">
+              <label for="awayLogoUrl"><i class="fas fa-plane"></i> Away-Logo-URL</label>
+              <input id="awayLogoUrl" type="text" placeholder="optional – sonst automatisch" />
+            </div>
+          </div>
+          <button type="button" id="saveCfgAdvanced" class="btn btn-primary">
+            <i class="fas fa-save"></i> Konfiguration speichern
+          </button>
+        </div>
 
-    <div class="card">
-      <div class="card-header">
-        <i class="fas fa-pause-circle"></i>
-        <h2>Auszeit-Popup testen</h2>
-      </div>
-      <p style="margin-bottom: 1rem; color: var(--text-secondary);">
-        Zeigt einmalig das große Auszeit-Popup in der Overlay-Mitte (Team-Logo, Sponsor, letzte 5 Events, Top-3-Torschützen). Nutzt das <strong>aktuell ausgewählte Spiel</strong> (Ticker-URL) und den <strong>aktuellen Spielstand</strong> – sofern die Combined-API erreichbar ist, sonst letztes Ereignis und Logos aus dem Score.
-      </p>
-      <div class="form-group">
-        <button type="button" id="testTimeoutPopup" class="btn btn-primary">
-          <i class="fas fa-play"></i> Mit aktuellem Spielstand testen
-        </button>
-      </div>
-      <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary);">
-        <i class="fas fa-info-circle"></i> Overlay-Seite muss geöffnet sein. Popup erscheint beim nächsten Poll für 30 Sekunden; Sponsor-Rotation wechselt danach.
-      </small>
-    </div>
+        <div class="card">
+          <div class="card-header">
+            <i class="fas fa-edit"></i>
+            <h2>Manueller Score</h2>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="homeTeam"><i class="fas fa-home"></i> Heimteam</label>
+              <input id="homeTeam" type="text" value="Heim" />
+            </div>
+            <div class="form-group">
+              <label for="awayTeam"><i class="fas fa-plane"></i> Gastteam</label>
+              <input id="awayTeam" type="text" value="Gast" />
+            </div>
+            <div class="form-group">
+              <label for="homeGoals"><i class="fas fa-futbol"></i> Heim Tore</label>
+              <input id="homeGoals" type="text" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="awayGoals"><i class="fas fa-futbol"></i> Gast Tore</label>
+              <input id="awayGoals" type="text" value="0" />
+            </div>
+            <div class="form-group">
+              <label for="clock"><i class="fas fa-clock"></i> Spieluhr (MM:SS)</label>
+              <input id="clock" type="text" value="00:00" />
+            </div>
+            <div class="form-group">
+              <label for="period"><i class="fas fa-stopwatch"></i> Phase</label>
+              <input id="period" type="text" value="1. Halbzeit" />
+            </div>
+            <div class="form-group">
+              <label for="lastScorer"><i class="fas fa-star"></i> Letzter Torschütze</label>
+              <input id="lastScorer" type="text" value="" />
+            </div>
+          </div>
+          <button id="saveScore" class="btn btn-success">
+            <i class="fas fa-save"></i> Score speichern
+          </button>
+        </div>
 
-    <div class="card">
-      <div class="card-header">
-        <i class="fas fa-clock"></i>
-        <h2>Halbzeit-Popup testen</h2>
-      </div>
-      <p style="margin-bottom: 1rem; color: var(--text-secondary);">
-        Zeigt einmalig das Halbzeit-Popup mit Spielerübersicht beider Teams (Nr., Name, Tore, Gelb, 2 Min, Rot, Blau). Nutzt das <strong>aktuell ausgewählte Spiel</strong> (Ticker-URL) und lädt Lineup-Daten aus der Combined-API.
-      </p>
-      <div class="form-group">
-        <button type="button" id="testHalftimePopup" class="btn btn-primary">
-          <i class="fas fa-play"></i> Halbzeit-Popup testen
-        </button>
-      </div>
-      <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary);">
-        <i class="fas fa-info-circle"></i> Overlay-Seite muss geöffnet sein. Popup erscheint beim nächsten Poll, maximal 30 Sekunden (Test).
-      </small>
-    </div>
+        <div class="card">
+          <div class="card-header">
+            <i class="fas fa-flask"></i>
+            <h2>Overlay-Events testen</h2>
+          </div>
+          <p style="margin-bottom: 1rem; color: var(--text-secondary);">
+            Löst im Overlay einmalig ein Event-Pop-up aus. Overlay-Seite muss geöffnet sein.
+          </p>
+          <div class="form-group">
+            <label>Optional: eigene Message</label>
+            <input id="testEventMessage" type="text" placeholder="z. B. Max Mustermann erhält eine 2-Minuten Strafe" style="width: 100%;" />
+          </div>
+          <div class="form-group">
+            <label>Optional: Spielername (für Tor/7m)</label>
+            <input id="testEventPlayer" type="text" placeholder="z. B. Max Mustermann" style="width: 100%;" />
+          </div>
+          <div class="test-event-buttons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+            <button type="button" class="btn btn-primary btn-test-event" data-type="Goal" data-msg="59:28 - Tor durch Max Mustermann (9.) (HSG Kastellaun/Simmern)">
+              <i class="fas fa-futbol"></i> Tor
+            </button>
+            <button type="button" class="btn btn-primary btn-test-event" data-type="SevenMeterGoal" data-msg="51:36 - 7-Meter Tor durch Nico Becker (17.) (SG Zweibrücken)">
+              <i class="fas fa-bullseye"></i> 7m-Tor
+            </button>
+            <button type="button" class="btn btn-warning btn-test-event" data-type="Warning" data-msg="09:00 - Samuel Reitz (19.) (SG Zweibrücken) wurde verwarnt">
+              <i class="fas fa-id-card"></i> Gelbe Karte
+            </button>
+            <button type="button" class="btn btn-primary btn-test-event" data-type="TwoMinutePenalty" data-msg="55:57 - Kilian Kötz (9.) (HSG Kastellaun/Simmern) erhält eine 2-Minuten Strafe">
+              <i class="fas fa-clock"></i> 2 Minuten
+            </button>
+            <button type="button" class="btn btn-danger btn-test-event" data-type="Disqualification" data-msg="29:20 - Nils Wöschler (13.) (SG Zweibrücken) wurde disqualifiziert">
+              <i class="fas fa-id-card"></i> Rote Karte
+            </button>
+            <button type="button" class="btn btn-primary btn-test-event" data-type="BlueCard" data-msg="45:00 - Blaue Karte für Spieler (HSG Kastellaun/Simmern)">
+              <i class="fas fa-id-card"></i> Blaue Karte
+            </button>
+          </div>
+        </div>
 
-    <div class="card">
-      <div class="card-header">
-        <i class="fas fa-images"></i>
-        <h2>Sponsoren & Assets</h2>
+        <div class="card">
+          <div class="card-header">
+            <i class="fas fa-pause-circle"></i>
+            <h2>Auszeit- / Halbzeit-Popup</h2>
+          </div>
+          <p style="margin-bottom: 1rem; color: var(--text-secondary);">
+            Nutzt das aktuell gesetzte Match (<code>/match/{id}</code>) und die neue handball.net-API.
+          </p>
+          <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+            <button type="button" id="testTimeoutPopup" class="btn btn-primary">
+              <i class="fas fa-play"></i> Auszeit testen
+            </button>
+            <button type="button" id="testHalftimePopup" class="btn btn-primary">
+              <i class="fas fa-play"></i> Halbzeit testen
+            </button>
+          </div>
+        </div>
       </div>
-      
-      <div class="sponsor-info">
-        <h3><i class="fas fa-lightbulb"></i> Automatische Sponsor-Erkennung</h3>
-        <p>Lade einfach Logos in den Ordner <code>/assets/logos</code> hoch - sie werden automatisch als LED-Bande oben durchgescrollt.</p>
-        <p><strong>Unterstützte Formate:</strong> PNG, JPG, WEBP, SVG</p>
-        <p><strong>Empfohlene Größe:</strong> 200x80px oder ähnliches Seitenverhältnis</p>
-      </div>
-    </div>
+    </details>
   </div>
 
   <div id="toast" class="toast"></div>

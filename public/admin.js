@@ -63,6 +63,7 @@ async function load() {
     document.getElementById("teamType").value = cfg.teamType || "herren1";
     document.getElementById("overlayLink").textContent = `${location.origin}/overlay`;
     updateScheduleButtonState();
+    updateSelectedMatchUI(cfg.tickerUrl || "");
 
     // Populate score fields
     for (const k of ["homeTeam","awayTeam","homeGoals","awayGoals","clock","period","lastScorer"]) {
@@ -77,12 +78,9 @@ async function load() {
 }
 
 // Save configuration
-document.getElementById("saveCfg").addEventListener("click", async () => {
-  const button = document.getElementById("saveCfg");
-  
+async function saveConfiguration(button) {
   try {
-    setLoading(button, true);
-    
+    if (button) setLoading(button, true);
     const payload = {
       tickerUrl: document.getElementById("tickerUrl").value.trim(),
       scheduleUrl: document.getElementById("scheduleUrl").value.trim(),
@@ -91,17 +89,73 @@ document.getElementById("saveCfg").addEventListener("click", async () => {
       awayLogoUrl: document.getElementById("awayLogoUrl").value.trim(),
       teamType: document.getElementById("teamType").value,
     };
-    
     await jpost("/api/config", payload);
     showToast("Konfiguration erfolgreich gespeichert! Fetcher läuft (falls URL gesetzt).", 'success');
     updateScheduleButtonState();
+    updateSelectedMatchUI(payload.tickerUrl || "");
   } catch (error) {
     console.error('Fehler beim Speichern der Konfiguration:', error);
     showToast('Fehler beim Speichern: ' + error.message, 'error');
   } finally {
-    setLoading(button, false);
+    if (button) setLoading(button, false);
   }
+}
+
+document.getElementById("saveCfg").addEventListener("click", async () => {
+  await saveConfiguration(document.getElementById("saveCfg"));
 });
+const saveCfgAdvanced = document.getElementById("saveCfgAdvanced");
+if (saveCfgAdvanced) {
+  saveCfgAdvanced.addEventListener("click", async () => {
+    await saveConfiguration(saveCfgAdvanced);
+  });
+}
+function updateSelectedMatchUI(tickerUrl, label) {
+  const panel = document.getElementById("selectedMatchPanel");
+  const titleEl = document.getElementById("selectedMatchLabel");
+  const metaEl = document.getElementById("selectedMatchMeta");
+  const url = (tickerUrl || "").trim();
+  if (!panel || !titleEl) return;
+
+  const listEl = document.getElementById("upcomingGamesList");
+  if (listEl) {
+    listEl.querySelectorAll(".upcoming-game-item").forEach((btn) => {
+      btn.classList.toggle("selected", !!(url && btn.dataset.tickerUrl === url));
+    });
+  }
+
+  if (!url) {
+    panel.style.display = "none";
+    titleEl.textContent = "—";
+    if (metaEl) metaEl.textContent = "";
+    return;
+  }
+
+  let displayLabel = (label || "").trim();
+  if (!displayLabel && listEl) {
+    listEl.querySelectorAll(".upcoming-game-item").forEach((btn) => {
+      if (btn.dataset.tickerUrl === url) {
+        displayLabel = (btn.dataset.label || "").trim();
+        if (!displayLabel) {
+          const firstText = Array.from(btn.childNodes).find((n) => n.nodeType === Node.TEXT_NODE);
+          displayLabel = firstText ? firstText.textContent.trim() : (btn.textContent || "").trim();
+        }
+      }
+    });
+  }
+  if (!displayLabel) {
+    const m = url.match(/\/match\/(\d+)/i);
+    displayLabel = m ? `Match ${m[1]}` : url;
+  }
+
+  titleEl.textContent = displayLabel;
+  if (metaEl) metaEl.textContent = url;
+  panel.style.display = "block";
+}
+
+function markSelectedUpcomingGame(tickerUrl) {
+  updateSelectedMatchUI(tickerUrl);
+}
 
 // Spielplan: Button-Zustand je nach scheduleUrl. Nach Fehler Retry erlauben (keepEnabledAfterError = true).
 function updateScheduleButtonState(keepEnabledAfterError) {
@@ -142,6 +196,7 @@ if (loadUpcomingEl) {
     }
     const games = Array.isArray(data) ? data : [];
     listEl.innerHTML = "";
+    const currentTickerUrl = (document.getElementById("tickerUrl") && document.getElementById("tickerUrl").value || "").trim();
     if (games.length === 0) {
       listEl.innerHTML = '<p style="color: var(--text-secondary);">Keine zukünftigen Spiele gefunden.</p>';
     } else {
@@ -150,20 +205,28 @@ if (loadUpcomingEl) {
         item.type = "button";
         item.className = "upcoming-game-item";
         item.dataset.tickerUrl = game.tickerUrl || "";
-        item.textContent = game.label || "";
+        item.dataset.label = game.label || "";
+        const labelText = document.createTextNode(game.label || "");
+        item.appendChild(labelText);
         if (game.dateTime) {
           const small = document.createElement("small");
           small.textContent = game.dateTime;
           item.appendChild(small);
         }
+        if (currentTickerUrl && game.tickerUrl === currentTickerUrl) {
+          item.classList.add("selected");
+        }
         item.addEventListener("click", async () => {
           const tickerUrl = item.dataset.tickerUrl;
           if (!tickerUrl) return;
           document.getElementById("tickerUrl").value = tickerUrl;
+          updateSelectedMatchUI(tickerUrl, item.dataset.label || game.label || "");
+          listEl.querySelectorAll(".upcoming-game-item").forEach((btn) => btn.classList.remove("selected"));
+          item.classList.add("selected");
           try {
             const currentCfg = await jget("/api/config");
             await jpost("/api/config", { ...currentCfg, tickerUrl });
-            showToast("Ticker-URL gesetzt und gespeichert.", "success");
+            showToast("Match ausgewählt und gespeichert.", "success");
           } catch (e) {
             console.error("Ticker setzen fehlgeschlagen:", e);
             showToast("Fehler beim Speichern: " + e.message, "error");
@@ -173,6 +236,7 @@ if (loadUpcomingEl) {
       });
     }
     container.style.display = "block";
+    updateSelectedMatchUI(currentTickerUrl);
   } catch (error) {
     errorOccurred = true;
     showToast(error.message || "Spiele konnten nicht geladen werden.", "error");
