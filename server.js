@@ -3,8 +3,26 @@ const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
 const cors = require('cors');
-const fetch = require('node-fetch');
-const cheerio = require('cheerio');
+const handball = require('./lib/handball');
+
+const {
+  parseMatchTickerUrl,
+  parseTeamScheduleUrl,
+  parseClubId,
+  teamScheduleUrl,
+  fetchUpcomingForTeamId,
+  fetchClubTeams,
+  fetchMatchDataBundle,
+  parseNewMatchApi,
+  buildTimeoutPopupFromNewApi,
+  buildHalftimePopupFromNewApi,
+  eventIndicatesGameStartOrResume,
+  isHalbzeitpauseBlock,
+  newestTimestamp,
+  DEFAULT_ORIGIN,
+} = handball;
+
+const DEFAULT_CLUB_ID = '0w1rgr0';
 
 // Debug helper function
 const DEBUG = process.env.DEBUG === '1';
@@ -25,57 +43,6 @@ function calculateSourceStamp(summary, events) {
     Math.max(...events.map(e => new Date(e.timestamp || e.time || 0).getTime())) : 0;
   // Use content-based timestamp, not current time, to allow new games
   return Math.max(summaryTime, newestEventTime);
-}
-
-// Deterministic newest event selection
-function selectNewestEvent(events) {
-  if (!events || events.length === 0) return null;
-
-  // Sort events deterministically: timestamp desc → id desc → gameTime/minute desc
-  const sortedEvents = events.slice().sort((a, b) => {
-    const timeA = new Date(a.timestamp || a.time || 0).getTime();
-    const timeB = new Date(b.timestamp || b.time || 0).getTime();
-    if (timeA !== timeB) return timeB - timeA;
-
-    const idA = Number(a.id || a.eventId || 0);
-    const idB = Number(b.id || b.eventId || 0);
-    if (idA !== idB) return idB - idA;
-
-    const gameTimeA = extractGameTime(a.minute || a.gameTime || a.time || '');
-    const gameTimeB = extractGameTime(b.minute || b.gameTime || b.time || '');
-    return gameTimeB - gameTimeA;
-  });
-
-  return sortedEvents[0];
-}
-
-// Extract game time in seconds from mm:ss format
-function extractGameTime(timeStr) {
-  if (!timeStr) return 0;
-  const match = timeStr.match(/(\d{1,2}):(\d{2})/);
-  if (match) {
-    const minutes = parseInt(match[1], 10);
-    const seconds = parseInt(match[2], 10);
-    return minutes * 60 + seconds;
-  }
-  return 0;
-}
-
-// Prüft, ob ein Event den Spielbeginn oder die Fortsetzung anzeigt
-function eventIndicatesGameStartOrResume(ev) {
-  if (!ev) return false;
-  const overlayType = mapNewApiEventToOverlayType(ev);
-  if (overlayType === 'Timeout') return false;
-  const typeName = (ev.event_type?.name || ev.type || ev.eventType || '').toString().trim().toLowerCase();
-  const msg = (ev.message || '').trim().toLowerCase();
-  const block = (ev.block || '').toString().trim().toLowerCase();
-  if (typeName === 'startperiod' || typeName === 'resume' || typeName === 'startseite teil') return true;
-  if (/1\.\s*halbzeit|2\.\s*halbzeit/.test(block) && /start/i.test(typeName)) return true;
-  return /spiel\s+gestartet|anpfiff|spielbeginn|spiel\s+läuft\s+weiter|auszeit\s+beendet|halbzeit\s+beendet|zweite\s+halbzeit\s+gestartet/.test(msg);
-}
-
-function isHalbzeitpauseBlock(block) {
-  return /halbzeitpause/i.test(String(block || '').trim());
 }
 
 // Score regression protection
@@ -134,21 +101,6 @@ function isPlaceholderTeam(name) {
   return s === '' || s === 'heim' || s === 'gast';
 }
 
-// Helper: dedupe/canonicalize event text after building
-function dedupeEventText(text) {
-  if (!text) return '';
-  let t = String(text).trim().replace(/\s+/g, ' ');
-  // Remove duplicated canonical phrases
-  t = t.replace(/((?:\d{1,2}:\d{2})\s*-\s*[^-]+?)(?:\s+\1)+/gi, '$1');
-  t = t.replace(/(Tor durch [^(]+\([^)]*\))(?:\s+\1)+/gi, '$1');
-  t = t.replace(/(7-Meter\s+Tor durch [^(]+\([^)]*\))(?:\s+\1)+/gi, '$1');
-  t = t.replace(/(7-Meter verworfen \([^)]+\))(?:\s+\1)+/gi, '$1');
-  t = t.replace(/(2 Minuten für [^(]+\([^)]+\))(?:\s+\1)+/gi, '$1');
-  t = t.replace(/(Timeout\s+[^-]+)(?:\s+\1)+/gi, '$1');
-  return t;
-}
-
-
 // Preserve non-placeholder teams if incoming data contains placeholders
 function preserveTeamsIfPlaceholder(newScoreData, currentScore) {
   const merged = { ...newScoreData };
@@ -159,53 +111,6 @@ function preserveTeamsIfPlaceholder(newScoreData, currentScore) {
     merged.awayTeam = currentScore.awayTeam;
   }
   return merged;
-}
-
-
-// Vom Overlay unterstützte Event-Typen (getEventHeadline in overlay.js). Andere API-Typen (z. B. StartPeriod, Resume) werden nicht übernommen.
-const OVERLAY_EVENT_TYPES = new Set(['Goal', 'SevenMeterGoal', 'Warning', 'TwoMinutePenalty', 'Disqualification', 'BlueCard']);
-
-function toOverlayEventType(raw) {
-  if (raw == null || typeof raw !== 'string') return '';
-  const t = raw.trim();
-  return OVERLAY_EVENT_TYPES.has(t) ? t : '';
-}
-
-/** Map new handball.net event_type → Overlay-Typ oder 'Timeout' (Popup) oder ''. */
-function mapNewApiEventToOverlayType(ev) {
-  if (!ev) return '';
-  const et = ev.event_type || {};
-  const id = Number(et.id);
-  const name = String(et.name || ev.type || ev.eventType || '').trim().toLowerCase();
-  if (id === 15 || name === 'tor' || (et.is_goal && !/siebenmeter|7[- ]?meter|7m/.test(name))) return 'Goal';
-  if (id === 39 || /siebenmeter\s*tor|7[- ]?meter\s*tor|7m[- ]?tor/.test(name)) return 'SevenMeterGoal';
-  if (id === 2 || /verwarnung|gelb/.test(name)) return 'Warning';
-  if (id === 13 || /zwei\s*minuten|2[- ]?min/.test(name)) return 'TwoMinutePenalty';
-  if (id === 30 || /auszeit|timeout/.test(name)) return 'Timeout';
-  if (/disqualif|rote\s*karte|red\s*card/.test(name)) return 'Disqualification';
-  if (/blau|blue\s*card/.test(name)) return 'BlueCard';
-  if (et.is_goal) return /siebenmeter|7[- ]?meter|7m/.test(name) ? 'SevenMeterGoal' : 'Goal';
-  return '';
-}
-
-function formatNewApiPlayerName(player) {
-  if (!player) return '';
-  if (typeof player === 'string') return player.trim();
-  return [player.first_name, player.last_name].filter(Boolean).join(' ').trim();
-}
-
-function buildNewApiEventText(ev, homeTeam, awayTeam) {
-  const minute = String(ev.minute || ev.gameTime || ev.time || '').trim();
-  const typeName = String(ev.event_type?.name || '').trim() || 'Ereignis';
-  const player = formatNewApiPlayerName(ev.player);
-  const team = (ev.team && ev.team.name)
-    || (ev.is_home === true ? homeTeam : ev.is_home === false ? awayTeam : '')
-    || '';
-  let body = typeName;
-  if (player && team) body = `${typeName} ${player} (${team})`;
-  else if (player) body = `${typeName} ${player}`;
-  else if (team) body = `${typeName} (${team})`;
-  return dedupeEventText(minute ? `${minute} - ${body}` : body);
 }
 
 // Valid-Packet Gate
@@ -299,7 +204,15 @@ if (!fs.existsSync(SCORE_FILE)) fs.writeFileSync(SCORE_FILE, JSON.stringify({
   lastEvent: '', gameStatus: 'Live'
 }, null, 2));
 if (!fs.existsSync(CONFIG_FILE)) fs.writeFileSync(CONFIG_FILE, JSON.stringify({
-  tickerUrl: '', homeLogoUrl: '', awayLogoUrl: ''
+  tickerUrl: '',
+  homeLogoUrl: '',
+  awayLogoUrl: '',
+  clubId: DEFAULT_CLUB_ID,
+  selectedTeamId: '',
+  ourTeamId: '',
+  scheduleUrl: '',
+  ourTeamName: '',
+  teamType: 'herren1',
 }, null, 2));
 
 const readJSON = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return fallback; } };
@@ -766,6 +679,13 @@ app.get('/api/score', (req, res) => {
   if (config.ourTeamName && typeof config.ourTeamName === 'string') {
     score.ourTeamName = config.ourTeamName.trim();
   }
+  if (config.ourTeamId != null && String(config.ourTeamId).trim()) {
+    score.ourTeamId = String(config.ourTeamId).trim();
+  }
+  if (score.ourSide == null && score.ourTeamId && score.homeTeamId && score.awayTeamId) {
+    if (String(score.homeTeamId) === String(score.ourTeamId)) score.ourSide = 'home';
+    else if (String(score.awayTeamId) === String(score.ourTeamId)) score.ourSide = 'away';
+  }
   res.json(score);
 });
 
@@ -799,450 +719,89 @@ app.get('/api/config', (req, res) => {
   const { referer, ...configWithoutReferer } = config;
   res.json(configWithoutReferer);
 });
-app.post('/api/config', (req, res) => {
-  // Entferne referer aus der Konfiguration, da er nicht mehr benötigt wird
-  const { referer, ...configWithoutReferer } = req.body;
-  const currentConfig = readJSON(CONFIG_FILE, {});
-  const newConfig = { ...currentConfig, ...configWithoutReferer };
-  writeJSON(CONFIG_FILE, newConfig);
-  startFetcher();
-  res.json({ ok: true, config: newConfig });
-});
-
 app.get('/overlay', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'overlay.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'admin.html')));
 
-// Spielplan + Match-API (handball.net)
-// Team:  https://handball.net/team/{id}
-// Match: https://handball.net/match/{id}
-const HANDBALL_NET_ORIGINS = new Set(['https://www.handball.net', 'https://handball.net']);
-const SCHEDULE_PATH_TEAM = /^\/team\/(\d+)\/?$/i;
-const MATCH_PATH = /^\/match\/(\d+)\/?$/i;
-const CLIENT_TOKEN_TTL_MS = 8 * 60 * 1000;
-let cachedClientToken = { origin: '', token: '', fetchedAt: 0 };
 let lastHandledTimeoutEventId = null;
 let lastHandledHalftimeEventId = null;
 let lastSeenMatchBlock = '';
 
-function isHandballNetOrigin(origin) {
-  return HANDBALL_NET_ORIGINS.has(origin);
+function normalizeConfig(config) {
+  const next = { ...config };
+  const clubId = parseClubId(next.clubId) || parseClubId(next.clubUrl) || DEFAULT_CLUB_ID;
+  next.clubId = clubId;
+  delete next.clubUrl;
+
+  if (next.selectedTeamId != null && String(next.selectedTeamId).trim()) {
+    next.selectedTeamId = String(next.selectedTeamId).trim();
+  } else {
+    const fromSchedule = parseTeamScheduleUrl(next.scheduleUrl || '');
+    next.selectedTeamId = fromSchedule ? fromSchedule.teamId : (next.selectedTeamId || '');
+  }
+
+  if (next.ourTeamId != null && String(next.ourTeamId).trim()) {
+    next.ourTeamId = String(next.ourTeamId).trim();
+  } else if (next.selectedTeamId) {
+    next.ourTeamId = String(next.selectedTeamId);
+  } else {
+    next.ourTeamId = '';
+  }
+
+  if (next.selectedTeamId && !parseTeamScheduleUrl(next.scheduleUrl || '')) {
+    next.scheduleUrl = teamScheduleUrl(next.selectedTeamId, { origin: 'https://handball.net' });
+  }
+  return next;
 }
 
-function isValidScheduleUrl(url) {
-  if (!url || typeof url !== 'string') return false;
+app.post('/api/config', (req, res) => {
+  const { referer, ...configWithoutReferer } = req.body || {};
+  const currentConfig = readJSON(CONFIG_FILE, {});
+  const merged = normalizeConfig({ ...currentConfig, ...configWithoutReferer });
+  writeJSON(CONFIG_FILE, merged);
+  startFetcher();
+  res.json({ ok: true, config: merged });
+});
+
+app.get('/api/club/teams', async (req, res) => {
   try {
-    const u = new URL(url.trim());
-    if (!isHandballNetOrigin(u.origin)) return false;
-    return SCHEDULE_PATH_TEAM.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
-function parseTeamScheduleUrl(url) {
-  try {
-    const u = new URL(url.trim());
-    const match = u.pathname.match(SCHEDULE_PATH_TEAM);
-    if (!match || !isHandballNetOrigin(u.origin)) return null;
-    return {
-      teamId: match[1],
-      seasonId: (u.searchParams.get('season_id') || '').trim() || null,
-      origin: u.origin,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseMatchTickerUrl(url) {
-  if (!url || typeof url !== 'string') return null;
-  try {
-    const u = new URL(url.trim());
-    const match = u.pathname.match(MATCH_PATH);
-    if (!match || !isHandballNetOrigin(u.origin)) return null;
-    return { matchId: match[1], origin: u.origin };
-  } catch {
-    return null;
-  }
-}
-
-function handballBrowserHeaders(origin, accept) {
-  return {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': accept,
-    'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
-    'Referer': `${origin}/`,
-    'Cache-Control': 'no-cache',
-  };
-}
-
-function extractClientToken(html) {
-  const $ = cheerio.load(html);
-  return ($('meta[name="client-token"]').attr('content') || '').trim() || null;
-}
-
-async function getHandballClientToken(origin) {
-  const now = Date.now();
-  if (
-    cachedClientToken.token
-    && cachedClientToken.origin === origin
-    && (now - cachedClientToken.fetchedAt) < CLIENT_TOKEN_TTL_MS
-  ) {
-    return cachedClientToken.token;
-  }
-  const pageRes = await fetch(`${origin}/`, {
-    headers: handballBrowserHeaders(origin, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'),
-    cache: 'no-store',
-  });
-  if (!pageRes.ok) {
-    const err = new Error(`handball.net Token-Seite nicht erreichbar (HTTP ${pageRes.status}).`);
-    err.status = 502;
-    throw err;
-  }
-  const token = extractClientToken(await pageRes.text());
-  if (!token) {
-    const err = new Error('handball.net Client-Token konnte nicht gelesen werden.');
-    err.status = 502;
-    throw err;
-  }
-  cachedClientToken = { origin, token, fetchedAt: now };
-  return token;
-}
-
-async function handballApiGet(origin, pathAndQuery, token) {
-  const url = pathAndQuery.startsWith('http') ? pathAndQuery : `${origin}${pathAndQuery}`;
-  const headers = {
-    ...handballBrowserHeaders(origin, 'application/json'),
-    'x-client-token': token,
-  };
-  let res = await fetch(url, { headers, cache: 'no-store' });
-  if (res.status === 403) {
-    cachedClientToken = { origin: '', token: '', fetchedAt: 0 };
-    const fresh = await getHandballClientToken(origin);
-    headers['x-client-token'] = fresh;
-    res = await fetch(url, { headers, cache: 'no-store' });
-  }
-  return res;
-}
-
-function formatMatchDateTime(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  try {
-    return new Intl.DateTimeFormat('de-DE', {
-      weekday: 'short',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Europe/Berlin',
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-}
-
-function mapApiMatchToUpcoming(match, origin) {
-  const gameId = String(match.id);
-  const home = (match.local && match.local.name) || 'Heim';
-  const away = (match.visitor && match.visitor.name) || 'Gast';
-  return {
-    gameId,
-    label: `${home} vs ${away}`,
-    dateTime: formatMatchDateTime(match.date),
-    tickerUrl: `${origin}/match/${gameId}`,
-  };
-}
-
-async function fetchUpcomingFromTeamApi(scheduleUrl) {
-  const parsed = parseTeamScheduleUrl(scheduleUrl);
-  if (!parsed) {
-    const err = new Error('Ungültige Team-Spielplan-URL.');
-    err.status = 400;
-    throw err;
-  }
-  const { teamId, seasonId, origin } = parsed;
-  const clientToken = await getHandballClientToken(origin);
-
-  let dateFrom = '2026-07-01';
-  let dateTo = '2027-06-30';
-  try {
-    const seasonsRes = await handballApiGet(origin, '/api/new/seasons', clientToken);
-    if (seasonsRes.ok) {
-      const seasonsJson = await seasonsRes.json();
-      const seasons = Array.isArray(seasonsJson?.data) ? seasonsJson.data : [];
-      const season = (seasonId && seasons.find((s) => String(s.id) === String(seasonId)))
-        || seasons.find((s) => s.is_active)
-        || seasons[0];
-      if (season?.start_date) dateFrom = String(season.start_date).slice(0, 10);
-      if (season?.end_date) dateTo = String(season.end_date).slice(0, 10);
-    }
+    const config = readJSON(CONFIG_FILE, {});
+    const clubId = parseClubId(req.query.clubId)
+      || parseClubId(config.clubId)
+      || DEFAULT_CLUB_ID;
+    const seasonId = (req.query.season_id || req.query.seasonId || '').trim() || null;
+    const result = await fetchClubTeams(clubId, { origin: DEFAULT_ORIGIN, seasonId });
+    return res.json(result);
   } catch (err) {
-    console.warn('[schedule] seasons lookup failed, using default range:', err.message);
-  }
-
-  const matchesUrl = `/api/new/matches?team_id=${encodeURIComponent(teamId)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}&per_page=100`;
-  const matchesRes = await handballApiGet(origin, matchesUrl, clientToken);
-  if (!matchesRes.ok) {
-    const err = new Error(`Spielplan-API nicht erreichbar (HTTP ${matchesRes.status}).`);
-    err.status = 502;
-    throw err;
-  }
-  const matchesJson = await matchesRes.json();
-  const matches = Array.isArray(matchesJson?.data) ? matchesJson.data : [];
-  const now = Date.now();
-  return matches
-    .filter((m) => m && !m.status?.is_finished)
-    .filter((m) => {
-      if (!m.date) return true;
-      const t = new Date(m.date).getTime();
-      return Number.isNaN(t) || t >= now - 6 * 60 * 60 * 1000;
-    })
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .slice(0, 3)
-    .map((m) => mapApiMatchToUpcoming(m, origin));
-}
-
-app.get('/api/schedule/upcoming', async (req, res) => {
-  const config = readJSON(CONFIG_FILE, {});
-  const scheduleUrl = (config.scheduleUrl || '').trim();
-  if (!scheduleUrl) {
-    return res.status(400).json({ error: 'Kein Spielplan-Link gespeichert. Bitte zuerst Spielplan-Link eintragen und Konfiguration speichern.' });
-  }
-  if (!isValidScheduleUrl(scheduleUrl)) {
-    return res.status(400).json({ error: 'Ungültiger Spielplan-Link. Erlaubt: handball.net/team/{id} (optional ?season_id=…).' });
-  }
-  try {
-    const upcoming = await fetchUpcomingFromTeamApi(scheduleUrl);
-    return res.json(upcoming);
-  } catch (err) {
-    console.error('[schedule] Fetch failed:', err.message);
-    const status = err.status || 502;
-    return res.status(status).json({ error: err.message || 'Spielplan konnte nicht geladen werden.' });
+    console.error('[club/teams]', err.message);
+    return res.status(err.status || 502).json({ error: err.message || 'Teams konnten nicht geladen werden.' });
   }
 });
 
-function normalizeLogoUrl(raw) {
-  if (!raw || typeof raw !== 'string') return '';
-  if (raw.startsWith('handball-net:')) {
-    return 'https://www.handball.net/' + raw.split(':').slice(1).join(':').replace(/^\/?/, '');
+app.get('/api/schedule/upcoming', async (req, res) => {
+  const config = readJSON(CONFIG_FILE, {});
+  const teamId = (req.query.teamId || config.selectedTeamId || '').toString().trim()
+    || (parseTeamScheduleUrl(config.scheduleUrl || '') || {}).teamId
+    || '';
+  if (!teamId) {
+    return res.status(400).json({
+      error: 'Keine Mannschaft gewählt. Bitte im Admin eine Mannschaft auswählen.',
+    });
   }
-  if (raw.startsWith('/')) return 'https://handball.net' + raw;
-  return raw;
-}
-
-function playerFromMessage(msg) {
-  if (!msg) return '';
-  let m = msg.match(/Tor\s+durch\s+(.+?)\s+\(/i);
-  if (m) return m[1].trim();
-  m = msg.match(/7-Meter\s+Tor\s+durch\s+(.+?)\s+\(/i);
-  if (m) return m[1].trim();
-  return '';
-}
-
-function newestTimestamp(events) {
-  if (!events || !events.length) return 0;
-  return Math.max(...events.map((e) => new Date(e.timestamp || 0).getTime()).filter((n) => !Number.isNaN(n)), 0);
-}
-
-async function fetchMatchDataBundle(tickerUrl, { includeLineups = false } = {}) {
-  const parsed = parseMatchTickerUrl(tickerUrl);
-  if (!parsed) {
-    const err = new Error('Ungültige Match-URL. Erwartet: https://handball.net/match/{id}');
-    err.status = 400;
-    throw err;
+  try {
+    const seasonId = (req.query.season_id || '').trim()
+      || (parseTeamScheduleUrl(config.scheduleUrl || '') || {}).seasonId
+      || null;
+    const upcoming = await fetchUpcomingForTeamId(teamId, {
+      origin: DEFAULT_ORIGIN,
+      seasonId,
+      limit: 10,
+    });
+    return res.json(upcoming);
+  } catch (err) {
+    console.error('[schedule] Fetch failed:', err.message);
+    return res.status(err.status || 502).json({ error: err.message || 'Spielplan konnte nicht geladen werden.' });
   }
-  const { origin, matchId } = parsed;
-  const token = await getHandballClientToken(origin);
-  const [matchRes, eventsRes, lineupsRes] = await Promise.all([
-    handballApiGet(origin, `/api/new/matches?match_id=${encodeURIComponent(matchId)}`, token),
-    handballApiGet(origin, `/api/new/matches/${encodeURIComponent(matchId)}/events`, token),
-    includeLineups
-      ? handballApiGet(origin, `/api/new/matches/${encodeURIComponent(matchId)}/lineups`, token)
-      : Promise.resolve(null),
-  ]);
-  if (!matchRes.ok) {
-    const err = new Error(`Match-API nicht erreichbar (HTTP ${matchRes.status}).`);
-    err.status = 502;
-    throw err;
-  }
-  if (!eventsRes.ok) {
-    const err = new Error(`Events-API nicht erreichbar (HTTP ${eventsRes.status}).`);
-    err.status = 502;
-    throw err;
-  }
-  const matchJson = await matchRes.json();
-  const eventsJson = await eventsRes.json();
-  const match = Array.isArray(matchJson?.data) ? matchJson.data[0] : matchJson?.data;
-  if (!match) {
-    const err = new Error('Match nicht gefunden.');
-    err.status = 404;
-    throw err;
-  }
-  const events = Array.isArray(eventsJson?.data) ? eventsJson.data : [];
-  let lineups = null;
-  if (lineupsRes && lineupsRes.ok) {
-    try {
-      const lineupsJson = await lineupsRes.json();
-      lineups = lineupsJson?.data || null;
-    } catch (_) { /* ignore */ }
-  }
-  return { origin, matchId, match, events, lineups };
-}
-
-function parseNewMatchApi(match, events) {
-  const homeTeam = match.local?.name || 'Heim';
-  const awayTeam = match.visitor?.name || 'Gast';
-  const homeLogoUrl = normalizeLogoUrl(match.local?.club?.logo || '');
-  const awayLogoUrl = normalizeLogoUrl(match.visitor?.club?.logo || '');
-  const newestEvent = selectNewestEvent(events.slice());
-  const status = match.status || {};
-  const block = String(newestEvent?.block || '').trim();
-
-  let homeGoals = typeof match.result?.local === 'number' ? match.result.local : 0;
-  let awayGoals = typeof match.result?.visitor === 'number' ? match.result.visitor : 0;
-  if ((status.is_live || status.is_finished) && newestEvent?.score) {
-    if (typeof newestEvent.score.local === 'number') homeGoals = newestEvent.score.local;
-    if (typeof newestEvent.score.visitor === 'number') awayGoals = newestEvent.score.visitor;
-  }
-
-  let period = block || '';
-  let gameStatus = 'Vorbereitung';
-  if (status.is_finished) {
-    gameStatus = 'Beendet';
-    period = period || 'Spiel beendet';
-  } else if (status.is_live) {
-    if (isHalbzeitpauseBlock(block)) {
-      gameStatus = 'Pause';
-      period = block || 'Halbzeitpause';
-    } else {
-      gameStatus = 'Live';
-      period = period || 'Jetzt Live!';
-    }
-  } else {
-    gameStatus = 'Vorbereitung';
-    period = period || 'Vorbereitung';
-  }
-
-  let lastEvent = '';
-  let lastScorer = '';
-  let lastEventType = '';
-  let lastEventPhotoUrl = '';
-  let overlayType = '';
-  if (newestEvent) {
-    overlayType = mapNewApiEventToOverlayType(newestEvent);
-    lastEvent = buildNewApiEventText(newestEvent, homeTeam, awayTeam);
-    lastEventType = toOverlayEventType(overlayType);
-    if (overlayType === 'Goal' || overlayType === 'SevenMeterGoal') {
-      lastScorer = formatNewApiPlayerName(newestEvent.player);
-    }
-    lastEventPhotoUrl = (newestEvent.player && newestEvent.player.photo_url) || '';
-  } else if (!status.is_live && !status.is_finished) {
-    lastEvent = '00:00 - Spiel noch nicht gestartet';
-  }
-
-  return {
-    homeTeam,
-    awayTeam,
-    homeGoals,
-    awayGoals,
-    period,
-    gameStatus,
-    lastEvent,
-    lastScorer,
-    lastEventType,
-    lastEventPhotoUrl,
-    homeLogoUrl,
-    awayLogoUrl,
-    newestEvent,
-    overlayType,
-    block,
-    eventsCount: events.length,
-  };
-}
-
-function mapNewLineupPlayers(side, events) {
-  const players = Array.isArray(side?.players) ? side.players : [];
-  const teamId = side?.team?.id;
-  const statsByPlayerId = {};
-  for (const ev of events || []) {
-    const pid = ev.player?.id;
-    if (!pid) continue;
-    if (teamId != null && ev.team?.id != null && String(ev.team.id) !== String(teamId)) continue;
-    if (!statsByPlayerId[pid]) {
-      statsByPlayerId[pid] = { goals: 0, yellowCards: 0, timePenalties: 0, redCards: 0, blueCards: 0 };
-    }
-    const t = mapNewApiEventToOverlayType(ev);
-    if (t === 'Goal' || t === 'SevenMeterGoal') statsByPlayerId[pid].goals += 1;
-    if (t === 'Warning') statsByPlayerId[pid].yellowCards += 1;
-    if (t === 'TwoMinutePenalty') statsByPlayerId[pid].timePenalties += 1;
-    if (t === 'Disqualification') statsByPlayerId[pid].redCards += 1;
-    if (t === 'BlueCard') statsByPlayerId[pid].blueCards += 1;
-  }
-  return players.map((row) => {
-    const p = row.player || {};
-    const id = p.id;
-    const st = statsByPlayerId[id] || { goals: 0, yellowCards: 0, timePenalties: 0, redCards: 0, blueCards: 0 };
-    return {
-      number: row.number != null ? row.number : '',
-      name: formatNewApiPlayerName(p) || '–',
-      goals: st.goals,
-      yellowCards: st.yellowCards,
-      timePenalties: st.timePenalties,
-      redCards: st.redCards,
-      blueCards: st.blueCards,
-      firstname: p.first_name || '',
-      lastname: p.last_name || '',
-      penaltyGoals: 0,
-    };
-  });
-}
-
-function buildTimeoutPopupFromNewApi(parsed, events, lineups, newestEvent) {
-  const homePlayers = mapNewLineupPlayers(lineups?.local, events);
-  const awayPlayers = mapNewLineupPlayers(lineups?.visitor, events);
-  const top3 = (arr) => arr
-    .slice()
-    .sort((a, b) => (b.goals || 0) - (a.goals || 0))
-    .slice(0, 3)
-    .map((p) => ({ name: p.name || '–', goals: p.goals || 0, number: p.number != null ? p.number : '' }));
-  const isAway = newestEvent?.is_home === false;
-  const sortedEvents = events.slice().sort((a, b) => {
-    const ta = new Date(a.timestamp || 0).getTime();
-    const tb = new Date(b.timestamp || 0).getTime();
-    return tb - ta;
-  });
-  return {
-    team: isAway ? 'Away' : 'Home',
-    teamLogoUrl: (isAway ? parsed.awayLogoUrl : parsed.homeLogoUrl) || '',
-    homeLogoUrl: parsed.homeLogoUrl || '',
-    awayLogoUrl: parsed.awayLogoUrl || '',
-    last5Events: sortedEvents.slice(0, 5).map((e) => ({
-      time: String(e.minute || '').trim(),
-      message: buildNewApiEventText(e, parsed.homeTeam, parsed.awayTeam).replace(/^\d{1,2}:\d{2}\s*-\s*/, ''),
-    })),
-    top3Home: top3(homePlayers),
-    top3Away: top3(awayPlayers),
-  };
-}
-
-function buildHalftimePopupFromNewApi(parsed, events, lineups, title) {
-  const homePlayers = mapNewLineupPlayers(lineups?.local, events);
-  const awayPlayers = mapNewLineupPlayers(lineups?.visitor, events);
-  const sortByNumber = (arr) => arr.slice().sort((a, b) => (Number(a.number) || 0) - (Number(b.number) || 0));
-  return {
-    title: title || 'Halbzeit',
-    homeTeam: parsed.homeTeam || '',
-    awayTeam: parsed.awayTeam || '',
-    homeLogoUrl: parsed.homeLogoUrl || '',
-    awayLogoUrl: parsed.awayLogoUrl || '',
-    homePlayers: sortByNumber(homePlayers),
-    awayPlayers: sortByNumber(awayPlayers),
-    isTest: false,
-  };
-}
+});
 
 async function fetchOnce() {
   if (fetchLock) {
@@ -1298,8 +857,9 @@ async function fetchOnce() {
       return;
     }
 
+    const ourTeamId = (config.ourTeamId || config.selectedTeamId || '').toString().trim() || null;
     const { match, events } = await fetchMatchDataBundle(tickerUrl, { includeLineups: false });
-    const parsed = parseNewMatchApi(match, events);
+    const parsed = parseNewMatchApi(match, events, { ourTeamId });
     const currentScore = readJSON(SCORE_FILE, {});
 
     const sourceStamp = calculateSourceStamp(
@@ -1315,7 +875,6 @@ async function fetchOnce() {
       isStalePacket = false;
     }
 
-    // Live games: always accept if event id changed
     const newestEvent = parsed.newestEvent;
     const eventId = newestEvent?.id != null ? String(newestEvent.id) : '';
     if (eventId && eventId !== String(currentScore.lastEventId || '')) {
@@ -1333,13 +892,15 @@ async function fetchOnce() {
     let finalEventType = currentScore.lastEventType || '';
     let finalPhotoUrl = currentScore.lastEventPhotoUrl || '';
 
-    const eventIndicatesLive = newestEvent && eventIndicatesGameStartOrResume(newestEvent);
+    const eventIndicatesLive = !!(newestEvent && eventIndicatesGameStartOrResume(newestEvent))
+      || !!parsed.liveFromEvents;
+
     if (newestEvent) {
       finalEvent = parsed.lastEvent;
       finalScorer = parsed.lastScorer;
       finalEventType = parsed.lastEventType;
       finalPhotoUrl = parsed.lastEventPhotoUrl || '';
-    } else if (parsed.gameStatus === 'Vorbereitung') {
+    } else if (parsed.gameStatus === 'Vorbereitung' && !eventIndicatesLive) {
       finalEvent = '00:00 - Spiel noch nicht gestartet';
       finalScorer = '';
       finalEventType = '';
@@ -1349,6 +910,12 @@ async function fetchOnce() {
     let newScoreData = {
       homeTeam: parsed.homeTeam || currentScore.homeTeam || 'Heim',
       awayTeam: parsed.awayTeam || currentScore.awayTeam || 'Gast',
+      homeTeamId: parsed.homeTeamId || currentScore.homeTeamId || null,
+      awayTeamId: parsed.awayTeamId || currentScore.awayTeamId || null,
+      ourTeamId: parsed.ourTeamId || ourTeamId || null,
+      ourSide: parsed.ourSide || null,
+      lastEventTeamId: parsed.lastEventTeamId || null,
+      lastEventIsHome: parsed.lastEventIsHome,
       homeGoals: protectedScore.homeGoals,
       awayGoals: protectedScore.awayGoals,
       period: parsed.period || currentScore.period || '',
@@ -1368,17 +935,21 @@ async function fetchOnce() {
       newScoreData.period = parsed.period || 'Jetzt Live!';
     }
 
+    // Vorbereitung-Wipe nur wenn wirklich keine spielrelevanten Events existieren
     if (
       newScoreData.homeGoals === 0
       && newScoreData.awayGoals === 0
       && parsed.gameStatus === 'Vorbereitung'
       && !eventIndicatesLive
+      && !(events && events.length && parsed.liveFromEvents)
     ) {
       newScoreData.gameStatus = 'Vorbereitung';
-      newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
-      newScoreData.lastScorer = '';
-      newScoreData.lastEventType = '';
-      newScoreData.lastEventPhotoUrl = '';
+      if (!newestEvent) {
+        newScoreData.lastEvent = '00:00 - Spiel noch nicht gestartet';
+        newScoreData.lastScorer = '';
+        newScoreData.lastEventType = '';
+        newScoreData.lastEventPhotoUrl = '';
+      }
     }
 
     newScoreData = preserveTeamsIfPlaceholder(newScoreData, currentScore);
@@ -1389,14 +960,17 @@ async function fetchOnce() {
 
     const changed = hasRealChanges(newScoreData, currentScore)
       || newScoreData.lastEventId !== (currentScore.lastEventId || '')
-      || newScoreData.lastEventPhotoUrl !== (currentScore.lastEventPhotoUrl || '');
+      || newScoreData.lastEventPhotoUrl !== (currentScore.lastEventPhotoUrl || '')
+      || newScoreData.ourSide !== currentScore.ourSide
+      || newScoreData.homeTeamId !== currentScore.homeTeamId
+      || newScoreData.awayTeamId !== currentScore.awayTeamId;
 
     if (changed) {
       if (newScoreData.homeGoals > 80 || newScoreData.awayGoals > 80) {
         console.warn('[ticker] Ignoring implausible score:', newScoreData.homeGoals, newScoreData.awayGoals);
         return;
       }
-      const configData = readJSON(CONFIG_FILE, {});
+      const configData = normalizeConfig(readJSON(CONFIG_FILE, {}));
       if (parsed.homeLogoUrl) configData.homeLogoUrl = parsed.homeLogoUrl;
       if (parsed.awayLogoUrl) configData.awayLogoUrl = parsed.awayLogoUrl;
       writeJSON(CONFIG_FILE, configData);

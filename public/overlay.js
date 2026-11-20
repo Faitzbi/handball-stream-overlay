@@ -34,8 +34,22 @@ var lastKnownScore = { homeGoals: 0, awayGoals: 0 };
 var clientEventStabilityCount = 0;
 var CLIENT_EVENT_STABILITY_THRESHOLD = 1; // Weniger restriktiv
 
-// Prüft, ob ein Event-Pop-up angezeigt werden soll: wenn ourTeamName gesetzt ist, nur wenn das Event unser Team betrifft
+// Prüft, ob ein Event-Pop-up angezeigt werden soll.
+// Primär: ourTeamId / ourSide / lastEventTeamId; Fallback: ourTeamName im Event-Text.
 function eventIsForOurTeam(score, eventMessage) {
+  if (!score) return true;
+  var ourId = (score.ourTeamId != null && String(score.ourTeamId).trim()) ? String(score.ourTeamId).trim() : "";
+  if (ourId) {
+    if (score.lastEventTeamId != null && String(score.lastEventTeamId).trim()) {
+      return String(score.lastEventTeamId) === ourId;
+    }
+    if (score.ourSide === "home" || score.ourSide === "away") {
+      if (score.lastEventIsHome === true) return score.ourSide === "home";
+      if (score.lastEventIsHome === false) return score.ourSide === "away";
+    }
+    // IDs gesetzt, aber Event ohne Teamzuordnung → anzeigen
+    return true;
+  }
   var our = (score.ourTeamName && typeof score.ourTeamName === "string") ? score.ourTeamName.trim() : "";
   if (!our) return true;
   var msg = (eventMessage && typeof eventMessage === "string") ? eventMessage : "";

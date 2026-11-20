@@ -315,6 +315,71 @@
       font-size: 0.8rem;
       margin-top: 0.25rem;
     }
+    .team-picker {
+      display: none;
+      margin-top: 0.25rem;
+      padding: 1rem 1.15rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: rgba(15, 23, 42, 0.35);
+    }
+    .team-picker.is-visible {
+      display: block;
+    }
+    .team-filter-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+      margin-bottom: 0.85rem;
+    }
+    .team-filter-row .form-group {
+      margin-bottom: 0;
+    }
+    .team-filter-row select,
+    #teamSelect {
+      width: 100%;
+      padding: 0.75rem 0.9rem;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-light);
+      color: var(--text-primary);
+      font-size: 0.95rem;
+    }
+    .team-filter-row select:focus,
+    #teamSelect:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .team-select-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.75rem;
+      align-items: end;
+    }
+    .team-select-row > input[type="text"] {
+      width: 100%;
+      padding: 0.875rem 1rem;
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-light);
+      color: var(--text-primary);
+      font-size: 0.95rem;
+    }
+    .team-select-row .form-group {
+      margin-bottom: 0;
+    }
+    #clubTeamsHint {
+      display: block;
+      margin-top: 0.65rem;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+    @media (max-width: 700px) {
+      .team-filter-row,
+      .team-select-row {
+        grid-template-columns: 1fr;
+      }
+    }
     .upcoming-game-item.selected {
       border-color: var(--success);
       background: rgba(16, 185, 129, 0.15);
@@ -625,17 +690,53 @@
         <h2>Spielplan &amp; Match</h2>
       </div>
       <div class="form-group">
-        <label for="scheduleUrl"><i class="fas fa-users"></i> Team-URL (handball.net)</label>
-        <input id="scheduleUrl" type="text" placeholder="https://handball.net/team/86496"/>
-        <small>Team-URL eintragen, dann „Nächste Spiele laden“ – die URL wird dabei automatisch gespeichert.</small>
+        <label for="clubId"><i class="fas fa-home"></i> Verein (Club-ID oder Club-URL)</label>
+        <div class="team-select-row">
+          <input id="clubId" type="text" placeholder="0w1rgr0 oder https://handball.net/club/0w1rgr0"/>
+          <button type="button" id="loadClubTeams" class="btn btn-primary">
+            <i class="fas fa-sync-alt"></i> Laden
+          </button>
+        </div>
+        <small>Standard: HSG Kastellaun-Simmern</small>
       </div>
-      <div class="form-group">
-        <button type="button" id="loadUpcoming" class="btn btn-primary">
-          <i class="fas fa-sync-alt"></i> Nächste Spiele laden
-        </button>
-        <span id="scheduleLoadHint" style="margin-left: 0.75rem; color: var(--text-secondary); font-size: 0.875rem;">Bitte zuerst eine Team-URL eintragen.</span>
+      <div id="clubTeams" class="team-picker">
+        <div class="team-filter-row">
+          <div class="form-group">
+            <label for="teamFilterAge"><i class="fas fa-filter"></i> Altersklasse</label>
+            <select id="teamFilterAge">
+              <option value="all">Alle</option>
+              <option value="adult">Erwachsene</option>
+              <option value="youth">Jugend</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="teamFilterGender"><i class="fas fa-venus-mars"></i> Geschlecht</label>
+            <select id="teamFilterGender">
+              <option value="all">Alle</option>
+              <option value="Männer">Männer</option>
+              <option value="Frauen">Frauen</option>
+              <option value="Mixed">Mixed</option>
+            </select>
+          </div>
+        </div>
+        <div class="team-select-row">
+          <div class="form-group">
+            <label for="teamSelect"><i class="fas fa-users"></i> Mannschaft</label>
+            <select id="teamSelect">
+              <option value="">— Mannschaft wählen —</option>
+            </select>
+          </div>
+          <button type="button" id="selectTeamBtn" class="btn btn-primary">
+            <i class="fas fa-check"></i> Übernehmen
+          </button>
+        </div>
+        <span id="clubTeamsHint"></span>
       </div>
-      <div id="upcomingGames" class="upcoming-games" style="display: none;">
+      <div id="selectedTeamPanel" class="selected-match-panel" style="display: none; margin-top: 1rem;">
+        <div class="selected-match-label"><i class="fas fa-user-friends"></i> Gewählte Mannschaft</div>
+        <div id="selectedTeamLabel" class="selected-match-title">—</div>
+      </div>
+      <div id="upcomingGames" class="upcoming-games" style="display: none; margin-top: 1.25rem;">
         <p style="margin-bottom: 0.75rem; color: var(--text-secondary); font-size: 0.95rem;">Nächste Spiele – Klick wählt das Match und speichert es sofort:</p>
         <div id="upcomingGamesList"></div>
       </div>
@@ -645,11 +746,6 @@
         <small id="selectedMatchMeta" class="selected-match-meta"></small>
       </div>
       <div class="form-row" style="margin-top: 1.25rem;">
-        <div class="form-group">
-          <label for="ourTeamName"><i class="fas fa-id-badge"></i> Unser Team</label>
-          <input id="ourTeamName" type="text" placeholder="z. B. HSG Kastellaun/Simmern" />
-          <small>Optional: Pop-ups nur für dieses Team.</small>
-        </div>
         <div class="form-group">
           <label for="teamType"><i class="fas fa-layer-group"></i> Anzeige-Modus</label>
           <select id="teamType">
@@ -719,8 +815,20 @@
           <div class="form-group">
             <label for="tickerUrl"><i class="fas fa-link"></i> Match-URL (manuell)</label>
             <input id="tickerUrl" type="text" placeholder="https://handball.net/match/501227"/>
-            <small>Wird normalerweise über „Nächste Spiele“ gesetzt. Live-Fetcher läuft nach dem Speichern.</small>
+            <small>Wird normalerweise über Mannschaft → Spiele gesetzt. Live-Fetcher läuft nach dem Speichern.</small>
           </div>
+          <div class="form-group">
+            <label for="scheduleUrl"><i class="fas fa-link"></i> Team-URL (Fallback)</label>
+            <input id="scheduleUrl" type="text" placeholder="https://handball.net/team/86496"/>
+            <small>Optional. Wird beim Mannschafts-Klick automatisch gesetzt.</small>
+          </div>
+          <div class="form-group">
+            <label for="ourTeamName"><i class="fas fa-id-badge"></i> Unser Team (Name, optional)</label>
+            <input id="ourTeamName" type="text" placeholder="z. B. HSG Kastellaun/Simmern" />
+            <small>Fallback für Pop-ups; primär gilt die gewählte Mannschafts-ID.</small>
+          </div>
+          <input type="hidden" id="selectedTeamId" value="" />
+          <input type="hidden" id="ourTeamId" value="" />
           <div class="form-grid">
             <div class="form-group">
               <label for="homeLogoUrl"><i class="fas fa-home"></i> Home-Logo-URL</label>

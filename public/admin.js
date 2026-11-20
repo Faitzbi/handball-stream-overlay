@@ -427,6 +427,132 @@ function setLoading(element, loading = true) {
   }
 }
 
+function readConfigForm() {
+  return {
+    tickerUrl: (document.getElementById("tickerUrl")?.value || "").trim(),
+    scheduleUrl: (document.getElementById("scheduleUrl")?.value || "").trim(),
+    ourTeamName: (document.getElementById("ourTeamName")?.value || "").trim(),
+    homeLogoUrl: (document.getElementById("homeLogoUrl")?.value || "").trim(),
+    awayLogoUrl: (document.getElementById("awayLogoUrl")?.value || "").trim(),
+    teamType: document.getElementById("teamType")?.value || "herren1",
+    clubId: (document.getElementById("clubId")?.value || "").trim() || "0w1rgr0",
+    selectedTeamId: (document.getElementById("selectedTeamId")?.value || "").trim(),
+    ourTeamId: (document.getElementById("ourTeamId")?.value || "").trim(),
+  };
+}
+
+/** @type {Array<{id:string,name:string,gender:string,ageCategory:string,label:string}>} */
+let clubTeamsCache = [];
+
+function isAdultAgeCategory(ageCategory) {
+  const a = String(ageCategory || "").toUpperCase();
+  return a === "ERWACHSENE" || a === "AKTIVE" || a.includes("ERWACHS");
+}
+
+function teamOptionLabel(team) {
+  const bits = [team.name || `Team ${team.id}`, team.gender, team.ageCategory].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function setSelectedTeamUI(teamId, label) {
+  const idEl = document.getElementById("selectedTeamId");
+  const ourEl = document.getElementById("ourTeamId");
+  const panel = document.getElementById("selectedTeamPanel");
+  const title = document.getElementById("selectedTeamLabel");
+  const select = document.getElementById("teamSelect");
+  if (idEl) idEl.value = teamId || "";
+  if (ourEl) ourEl.value = teamId || "";
+  if (panel && title) {
+    if (teamId) {
+      panel.style.display = "block";
+      title.textContent = label || `Team ${teamId}`;
+    } else {
+      panel.style.display = "none";
+      title.textContent = "—";
+    }
+  }
+  if (select && teamId) {
+    const exists = Array.from(select.options).some((o) => o.value === String(teamId));
+    if (exists) select.value = String(teamId);
+  }
+}
+
+function getFilteredClubTeams() {
+  const ageFilter = document.getElementById("teamFilterAge")?.value || "all";
+  const genderFilter = document.getElementById("teamFilterGender")?.value || "all";
+  return clubTeamsCache.filter((team) => {
+    const adult = isAdultAgeCategory(team.ageCategory);
+    if (ageFilter === "adult" && !adult) return false;
+    if (ageFilter === "youth" && adult) return false;
+    if (genderFilter !== "all" && String(team.gender || "") !== genderFilter) return false;
+    return true;
+  });
+}
+
+function populateTeamSelect(preferredTeamId) {
+  const select = document.getElementById("teamSelect");
+  const hint = document.getElementById("clubTeamsHint");
+  if (!select) return;
+  const preferred = (preferredTeamId || document.getElementById("selectedTeamId")?.value || "").toString().trim();
+  const filtered = getFilteredClubTeams();
+  const previous = select.value;
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = filtered.length ? "— Mannschaft wählen —" : "Keine Mannschaft für Filter";
+  select.appendChild(placeholder);
+
+  filtered.forEach((team) => {
+    const opt = document.createElement("option");
+    opt.value = String(team.id);
+    opt.textContent = teamOptionLabel(team);
+    select.appendChild(opt);
+  });
+
+  if (preferred && filtered.some((t) => String(t.id) === preferred)) {
+    select.value = preferred;
+  } else if (previous && filtered.some((t) => String(t.id) === previous)) {
+    select.value = previous;
+  } else {
+    select.value = "";
+  }
+
+  if (hint) {
+    hint.textContent = `${filtered.length} von ${clubTeamsCache.length} Mannschaften`;
+  }
+}
+
+async function applySelectedTeamFromDropdown() {
+  const select = document.getElementById("teamSelect");
+  const teamId = (select?.value || "").trim();
+  if (!teamId) {
+    showToast("Bitte eine Mannschaft auswählen.", "error");
+    return;
+  }
+  const team = clubTeamsCache.find((t) => String(t.id) === teamId);
+  const label = team ? teamOptionLabel(team) : `Team ${teamId}`;
+  setSelectedTeamUI(teamId, label);
+  if (document.getElementById("scheduleUrl")) {
+    document.getElementById("scheduleUrl").value = `https://handball.net/team/${teamId}`;
+  }
+  try {
+    const cfg = await jget("/api/config");
+    await jpost("/api/config", {
+      ...cfg,
+      ...readConfigForm(),
+      selectedTeamId: teamId,
+      ourTeamId: teamId,
+      scheduleUrl: `https://handball.net/team/${teamId}`,
+      selectedTeamLabel: label,
+    });
+    showToast("Mannschaft ausgewählt.", "success");
+    await loadUpcomingGames({ persistConfig: false, teamId });
+  } catch (e) {
+    console.error(e);
+    showToast("Fehler: " + e.message, "error");
+  }
+}
+
 // Load configuration and score data
 async function load() {
   try {
@@ -437,17 +563,18 @@ async function load() {
     
     // Populate form fields
     document.getElementById("tickerUrl").value = cfg.tickerUrl || "";
-    document.getElementById("scheduleUrl").value = cfg.scheduleUrl || "";
-    document.getElementById("ourTeamName").value = cfg.ourTeamName || "";
+    if (document.getElementById("scheduleUrl")) document.getElementById("scheduleUrl").value = cfg.scheduleUrl || "";
+    if (document.getElementById("ourTeamName")) document.getElementById("ourTeamName").value = cfg.ourTeamName || "";
     document.getElementById("homeLogoUrl").value = cfg.homeLogoUrl || "";
     document.getElementById("awayLogoUrl").value = cfg.awayLogoUrl || "";
     document.getElementById("teamType").value = cfg.teamType || "herren1";
+    if (document.getElementById("clubId")) document.getElementById("clubId").value = cfg.clubId || "0w1rgr0";
+    setSelectedTeamUI(cfg.selectedTeamId || cfg.ourTeamId || "", cfg.selectedTeamLabel || "");
     document.getElementById("overlayLink").textContent = `${location.origin}/overlay`;
     const sponsorTarget = document.getElementById("sponsorUploadTarget");
     if (sponsorTarget && !sponsorTarget.dataset.userTouched) {
       sponsorTarget.value = (cfg.teamType === "onlySponsor") ? "sponsorsOnly" : "sponsors";
     }
-    updateScheduleButtonState();
     updateSelectedMatchUI(cfg.tickerUrl || "");
     loadAssetLists();
 
@@ -458,9 +585,9 @@ async function load() {
     
     showToast('Daten erfolgreich geladen', 'success');
 
-    // Beim Start automatisch nächste Spiele laden, wenn Team-URL schon hinterlegt ist
-    if ((cfg.scheduleUrl || "").trim()) {
-      await loadUpcomingGames({ persistConfig: false });
+    await loadClubTeams({ persistConfig: false });
+    if ((cfg.selectedTeamId || cfg.ourTeamId || "").toString().trim()) {
+      await loadUpcomingGames({ persistConfig: false, teamId: cfg.selectedTeamId || cfg.ourTeamId });
     }
   } catch (error) {
     console.error('Fehler beim Laden der Daten:', error);
@@ -472,17 +599,9 @@ async function load() {
 async function saveConfiguration(button) {
   try {
     if (button) setLoading(button, true);
-    const payload = {
-      tickerUrl: document.getElementById("tickerUrl").value.trim(),
-      scheduleUrl: document.getElementById("scheduleUrl").value.trim(),
-      ourTeamName: document.getElementById("ourTeamName").value.trim(),
-      homeLogoUrl: document.getElementById("homeLogoUrl").value.trim(),
-      awayLogoUrl: document.getElementById("awayLogoUrl").value.trim(),
-      teamType: document.getElementById("teamType").value,
-    };
+    const payload = readConfigForm();
     await jpost("/api/config", payload);
     showToast("Konfiguration erfolgreich gespeichert! Fetcher läuft (falls URL gesetzt).", 'success');
-    updateScheduleButtonState();
     updateSelectedMatchUI(payload.tickerUrl || "");
   } catch (error) {
     console.error('Fehler beim Speichern der Konfiguration:', error);
@@ -548,61 +667,87 @@ function markSelectedUpcomingGame(tickerUrl) {
   updateSelectedMatchUI(tickerUrl);
 }
 
-// Spielplan: Button-Zustand je nach scheduleUrl. Nach Fehler Retry erlauben (keepEnabledAfterError = true).
-function updateScheduleButtonState(keepEnabledAfterError) {
-  const scheduleUrl = (document.getElementById("scheduleUrl") && document.getElementById("scheduleUrl").value || "").trim();
-  const btn = document.getElementById("loadUpcoming");
-  const hint = document.getElementById("scheduleLoadHint");
-  if (btn) btn.disabled = keepEnabledAfterError ? false : !scheduleUrl;
-  if (hint) hint.style.display = scheduleUrl ? "none" : "inline";
-}
+async function loadClubTeams(options = {}) {
+  const { persistConfig = true } = options;
+  const btn = document.getElementById("loadClubTeams");
+  const container = document.getElementById("clubTeams");
+  const hint = document.getElementById("clubTeamsHint");
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> …';
+    }
+    if (hint) hint.textContent = "Lade…";
 
-const scheduleUrlInput = document.getElementById("scheduleUrl");
-if (scheduleUrlInput) {
-  scheduleUrlInput.addEventListener("input", () => updateScheduleButtonState());
+    const form = readConfigForm();
+    if (persistConfig) {
+      const currentCfg = await jget("/api/config");
+      await jpost("/api/config", { ...currentCfg, ...form });
+    }
+
+    const clubId = encodeURIComponent(form.clubId || "0w1rgr0");
+    const res = await fetch(`/api/club/teams?clubId=${clubId}`);
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`;
+      try {
+        const errData = await res.json();
+        if (errData && errData.error) errMsg = errData.error;
+      } catch (_) { /* ignore */ }
+      throw new Error(errMsg);
+    }
+    const data = await res.json();
+    clubTeamsCache = Array.isArray(data.teams) ? data.teams : [];
+
+    const preferredId = (document.getElementById("selectedTeamId")?.value || "").trim();
+    const preferredTeam = clubTeamsCache.find((t) => String(t.id) === preferredId);
+    const ageSelect = document.getElementById("teamFilterAge");
+    const genderSelect = document.getElementById("teamFilterGender");
+    if (preferredTeam) {
+      if (ageSelect) ageSelect.value = isAdultAgeCategory(preferredTeam.ageCategory) ? "adult" : "youth";
+      if (genderSelect && preferredTeam.gender) genderSelect.value = preferredTeam.gender;
+    } else if (ageSelect && clubTeamsCache.some((t) => isAdultAgeCategory(t.ageCategory))) {
+      ageSelect.value = "adult";
+    }
+
+    if (container) container.classList.add("is-visible");
+    populateTeamSelect(preferredId);
+  } catch (error) {
+    console.warn("Mannschaften laden:", error.message || error);
+    showToast(error.message || "Mannschaften konnten nicht geladen werden.", "error");
+    if (hint) hint.textContent = "Fehler – erneut laden";
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-sync-alt"></i> Laden';
+    }
+  }
 }
 
 /**
  * Nächste Spiele laden und anzeigen.
- * @param {{ persistConfig?: boolean }} [options]
- * - persistConfig: Formularwerte vor dem Laden speichern (Button-Klick)
+ * @param {{ persistConfig?: boolean, teamId?: string }} [options]
  */
 async function loadUpcomingGames(options = {}) {
-  const { persistConfig = true } = options;
-  const btn = document.getElementById("loadUpcoming");
+  const { persistConfig = true, teamId: teamIdOpt } = options;
   const listEl = document.getElementById("upcomingGamesList");
   const container = document.getElementById("upcomingGames");
-  let errorOccurred = false;
   try {
-    const scheduleUrl = (document.getElementById("scheduleUrl") && document.getElementById("scheduleUrl").value || "").trim();
-    if (!scheduleUrl) {
-      throw new Error("Bitte zuerst eine Team-URL eintragen.");
-    }
-
-    if (btn) {
-      btn.disabled = true;
-      btn.innerHTML = persistConfig
-        ? '<i class="fas fa-spinner fa-spin"></i> Speichere & lade...'
-        : '<i class="fas fa-spinner fa-spin"></i> Lade...';
+    const teamId = (teamIdOpt || document.getElementById("selectedTeamId")?.value || "").toString().trim();
+    if (!teamId) {
+      throw new Error("Bitte zuerst eine Mannschaft auswählen.");
     }
 
     if (persistConfig) {
       const currentCfg = await jget("/api/config");
-      const payload = {
+      await jpost("/api/config", {
         ...currentCfg,
-        tickerUrl: document.getElementById("tickerUrl").value.trim(),
-        scheduleUrl,
-        ourTeamName: document.getElementById("ourTeamName").value.trim(),
-        homeLogoUrl: document.getElementById("homeLogoUrl").value.trim(),
-        awayLogoUrl: document.getElementById("awayLogoUrl").value.trim(),
-        teamType: document.getElementById("teamType").value,
-      };
-      await jpost("/api/config", payload);
-      updateScheduleButtonState();
-      if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Lade...';
+        ...readConfigForm(),
+        selectedTeamId: teamId,
+        ourTeamId: teamId,
+      });
     }
 
-    const res = await fetch("/api/schedule/upcoming");
+    const res = await fetch(`/api/schedule/upcoming?teamId=${encodeURIComponent(teamId)}`);
     if (!res.ok) {
       let errMsg = `HTTP ${res.status}`;
       try {
@@ -632,9 +777,10 @@ async function loadUpcomingGames(options = {}) {
         item.dataset.label = game.label || "";
         const labelText = document.createTextNode(game.label || "");
         item.appendChild(labelText);
-        if (game.dateTime) {
+        const metaBits = [game.dateTime, game.phaseName || game.competitionName].filter(Boolean);
+        if (metaBits.length) {
           const small = document.createElement("small");
-          small.textContent = game.dateTime;
+          small.textContent = metaBits.join(" · ");
           item.appendChild(small);
         }
         if (currentTickerUrl && game.tickerUrl === currentTickerUrl) {
@@ -649,7 +795,14 @@ async function loadUpcomingGames(options = {}) {
           item.classList.add("selected");
           try {
             const cfg = await jget("/api/config");
-            await jpost("/api/config", { ...cfg, tickerUrl });
+            const selectedTeamId = (document.getElementById("selectedTeamId")?.value || teamId || "").trim();
+            await jpost("/api/config", {
+              ...cfg,
+              ...readConfigForm(),
+              tickerUrl,
+              selectedTeamId,
+              ourTeamId: selectedTeamId,
+            });
             showToast("Match ausgewählt und gespeichert.", "success");
           } catch (e) {
             console.error("Ticker setzen fehlgeschlagen:", e);
@@ -662,18 +815,38 @@ async function loadUpcomingGames(options = {}) {
     if (container) container.style.display = "block";
     updateSelectedMatchUI(currentTickerUrl);
   } catch (error) {
-    errorOccurred = true;
     console.warn("Nächste Spiele laden:", error.message || error);
     showToast(error.message || "Spiele konnten nicht geladen werden.", "error");
-  } finally {
-    if (btn) btn.innerHTML = '<i class="fas fa-sync-alt"></i> Nächste Spiele laden';
-    updateScheduleButtonState(errorOccurred);
   }
 }
 
-const loadUpcomingEl = document.getElementById("loadUpcoming");
-if (loadUpcomingEl) {
-  loadUpcomingEl.addEventListener("click", () => loadUpcomingGames({ persistConfig: true }));
+const loadClubTeamsEl = document.getElementById("loadClubTeams");
+if (loadClubTeamsEl) {
+  loadClubTeamsEl.addEventListener("click", () => loadClubTeams({ persistConfig: true }));
+}
+const teamFilterAgeEl = document.getElementById("teamFilterAge");
+if (teamFilterAgeEl) {
+  teamFilterAgeEl.addEventListener("change", () => populateTeamSelect());
+}
+const teamFilterGenderEl = document.getElementById("teamFilterGender");
+if (teamFilterGenderEl) {
+  teamFilterGenderEl.addEventListener("change", () => populateTeamSelect());
+}
+const selectTeamBtnEl = document.getElementById("selectTeamBtn");
+if (selectTeamBtnEl) {
+  selectTeamBtnEl.addEventListener("click", () => applySelectedTeamFromDropdown());
+}
+const teamSelectEl = document.getElementById("teamSelect");
+if (teamSelectEl) {
+  teamSelectEl.addEventListener("change", () => {
+    // Nur vorwählen; Übernehmen speichert und lädt Spiele
+  });
+  teamSelectEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applySelectedTeamFromDropdown();
+    }
+  });
 }
 
 // Save score

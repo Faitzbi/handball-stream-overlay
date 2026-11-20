@@ -4,6 +4,9 @@
   "awayLogoUrl": "",
   "mascotUrl": "",
   "teamType": "onlySponsor",
-  "scheduleUrl": "https://handball.net/team/86496",
+  "clubId": "0w1rgr0",
+  "selectedTeamId": "",
+  "ourTeamId": "",
+  "scheduleUrl": "",
   "ourTeamName": ""
 }
